@@ -312,6 +312,62 @@ class LLMClient(
         prefs.apply()
     }
 
+    /**
+     * Returns a real embedding vector for the given text where the active provider
+     * supports it (OpenAI, Google, and Custom OpenAI-compatible endpoints).
+     * Anthropic has no embeddings endpoint, so this always fails for that provider -
+     * callers should catch that and fall back to a cheap stand-in vector instead.
+     */
+    suspend fun getEmbedding(text: String): Result<DoubleArray> {
+        val provider = getActiveProvider()
+            ?: return Result.failure(Exception("No active provider configured."))
+
+        return withContext(Dispatchers.IO) {
+            try {
+                when (provider.type) {
+                    ProviderType.OPENAI, ProviderType.CUSTOM -> {
+                        val base = provider.baseUrl.ifBlank { "https://api.openai.com" }
+                        val body = """{"model":"text-embedding-3-small","input":${json.encodeToString(text)}}"""
+                            .toRequestBody(JSON_MEDIA_TYPE)
+                        val req = Request.Builder()
+                            .url("$base/v1/embeddings")
+                            .addHeader("Authorization", "Bearer ${provider.apiKey}")
+                            .addHeader("Content-Type", "application/json")
+                            .post(body)
+                            .build()
+                        httpClient.newCall(req).execute().use { resp ->
+                            val respBody = resp.body?.string() ?: throw Exception("Empty response")
+                            if (!resp.isSuccessful) throw Exception("HTTP ${resp.code}: $respBody")
+                            val obj = org.json.JSONObject(respBody)
+                            val arr = obj.getJSONArray("data").getJSONObject(0).getJSONArray("embedding")
+                            Result.success(DoubleArray(arr.length()) { arr.getDouble(it) })
+                        }
+                    }
+                    ProviderType.GOOGLE -> {
+                        val base = provider.baseUrl.ifBlank { "https://generativelanguage.googleapis.com" }
+                        val body = """{"content":{"parts":[{"text":${json.encodeToString(text)}}]}}"""
+                            .toRequestBody(JSON_MEDIA_TYPE)
+                        val req = Request.Builder()
+                            .url("$base/v1beta/models/embedding-001:embedContent?key=${provider.apiKey}")
+                            .addHeader("Content-Type", "application/json")
+                            .post(body)
+                            .build()
+                        httpClient.newCall(req).execute().use { resp ->
+                            val respBody = resp.body?.string() ?: throw Exception("Empty response")
+                            if (!resp.isSuccessful) throw Exception("HTTP ${resp.code}: $respBody")
+                            val obj = org.json.JSONObject(respBody)
+                            val arr = obj.getJSONObject("embedding").getJSONArray("values")
+                            Result.success(DoubleArray(arr.length()) { arr.getDouble(it) })
+                        }
+                    }
+                    ProviderType.ANTHROPIC -> Result.failure(Exception("Anthropic has no embeddings endpoint"))
+                }
+            } catch (e: Exception) {
+                Result.failure(e)
+            }
+        }
+    }
+
     suspend fun testProvider(type: ProviderType): Result<String> {
         val provider = providers[type]
             ?: return Result.failure(Exception("Provider not configured"))

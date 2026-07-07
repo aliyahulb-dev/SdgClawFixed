@@ -32,6 +32,7 @@ class AgentLoop(
     private var isRunning = false
     private var conversationHistory = mutableListOf<ChatMessage>()
     private var currentIteration = 0
+    private val turnVectors = mutableListOf<DoubleArray>()
 
     // Callbacks
     private var onAgentResponse: ((String) -> Unit)? = null
@@ -163,6 +164,7 @@ class AgentLoop(
                     } else {
                         setState(AgentState.RESPONDING)
                         conversationHistory.add(ChatMessage("assistant", content))
+                        trackStability(content)
                         agentResponses.trySend(content)
                         onAgentResponse?.invoke(content)
                         setState(AgentState.IDLE)
@@ -176,6 +178,40 @@ class AgentLoop(
 
         } catch (e: Exception) {
             handleError(e.message ?: "Unknown error")
+        }
+    }
+
+    /**
+     * Cheap stand-in state vector used when real embeddings aren't available
+     * (e.g. Anthropic, which has no embeddings endpoint, or a network failure).
+     */
+    private fun fallbackStatsVector(text: String): DoubleArray {
+        val words = text.trim().split(Regex("\\s+")).filter { it.isNotEmpty() }
+        return doubleArrayOf(
+            text.length.toDouble(),
+            words.size.toDouble(),
+            words.toSet().size.toDouble(),
+            text.count { it in ".,!?;:" }.toDouble()
+        )
+    }
+
+    /**
+     * Records a numeric state vector for this turn's response (real embedding when
+     * the active provider supports it, otherwise a cheap fallback), then runs the
+     * black-box stability diagnostic once there's enough history. If the agent is
+     * detected to be stuck in a limit-cycle, stop early instead of burning through
+     * the remaining iterations.
+     */
+    private suspend fun trackStability(responseText: String) {
+        val vector = llmClient.getEmbedding(responseText).getOrElse { fallbackStatsVector(responseText) }
+        turnVectors.add(vector)
+
+        if (turnVectors.size >= 3) {
+            val report = StabilityDiagnostic.analyze(turnVectors.toTypedArray())
+            Log.d(TAG, "Stability check: regime=${report.regime} (${report.regimeDetail})")
+            if (report.regime == "limit-cycle") {
+                handleError("Stuck oscillating - stopping early (${report.regimeDetail})")
+            }
         }
     }
 
@@ -227,6 +263,7 @@ Be helpful, concise, and explain what you're doing when using tools.""".trimInde
 
     fun clearHistory() {
         conversationHistory.clear()
+        turnVectors.clear()
         currentIteration = 0
     }
 
