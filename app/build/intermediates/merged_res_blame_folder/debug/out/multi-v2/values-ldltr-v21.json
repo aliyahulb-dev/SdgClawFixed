@@ -1,0 +1,19 @@
+{
+    "logs": [
+        {
+            "outputFile": "com.sdgclaw.app-mergeDebugResources-37:/values-ldltr-v21/values-ldltr-v21.xml",
+            "map": [
+                {
+                    "source": "/home/test/.gradle/caches/8.13/transforms/51d3e94196ae9cc17c40add98b0674b8/transformed/appcompat-1.7.0/res/values-ldltr-v21/values-ldltr-v21.xml",
+                    "from": {
+                        "startLines": "2",
+                        "startColumns": "4",
+                        "startOffsets": "55",
+                        "endColumns": "112",
+                        "endOffsets": "163"
+                    }
+                }
+            ]
+        }
+    ]
+}

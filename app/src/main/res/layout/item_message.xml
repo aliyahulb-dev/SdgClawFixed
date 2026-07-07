@@ -1,0 +1,119 @@
+<?xml version="1.0" encoding="utf-8"?>
+<LinearLayout xmlns:android="http://schemas.android.com/apk/res/android"
+    android:layout_width="match_parent"
+    android:layout_height="wrap_content"
+    android:orientation="vertical"
+    android:padding="8dp">
+
+    <!-- User Message -->
+    <LinearLayout
+        android:id="@+id/llUserMessage"
+        android:layout_width="match_parent"
+        android:layout_height="wrap_content"
+        android:orientation="vertical"
+        android:gravity="end"
+        android:visibility="gone"
+        android:paddingEnd="16dp">
+
+        <TextView
+            android:id="@+id/tvUserMessage"
+            android:layout_width="wrap_content"
+            android:layout_height="wrap_content"
+            android:maxWidth="280dp"
+            android:padding="12dp"
+            android:background="@drawable/bg_user_message"
+            android:textColor="@color/white"
+            android:textSize="15sp"
+            android:text="User message" />
+
+        <TextView
+            android:id="@+id/tvUserTime"
+            android:layout_width="wrap_content"
+            android:layout_height="wrap_content"
+            android:layout_marginTop="4dp"
+            android:layout_marginEnd="4dp"
+            android:textColor="@color/gray_medium"
+            android:textSize="11sp"
+            android:text="12:00" />
+
+    </LinearLayout>
+
+    <!-- Assistant Message -->
+    <LinearLayout
+        android:id="@+id/llAssistantMessage"
+        android:layout_width="match_parent"
+        android:layout_height="wrap_content"
+        android:orientation="vertical"
+        android:gravity="start"
+        android:visibility="gone"
+        android:paddingStart="16dp">
+
+        <TextView
+            android:id="@+id/tvAssistantMessage"
+            android:layout_width="wrap_content"
+            android:layout_height="wrap_content"
+            android:maxWidth="280dp"
+            android:padding="12dp"
+            android:background="@drawable/bg_assistant_message"
+            android:textColor="@color/white"
+            android:textSize="15sp"
+            android:text="Assistant message" />
+
+        <TextView
+            android:id="@+id/tvAssistantTime"
+            android:layout_width="wrap_content"
+            android:layout_height="wrap_content"
+            android:layout_marginTop="4dp"
+            android:layout_marginStart="4dp"
+            android:textColor="@color/gray_medium"
+            android:textSize="11sp"
+            android:text="12:00" />
+
+    </LinearLayout>
+
+    <!-- Tool Message -->
+    <LinearLayout
+        android:id="@+id/llToolMessage"
+        android:layout_width="match_parent"
+        android:layout_height="wrap_content"
+        android:orientation="vertical"
+        android:gravity="center_horizontal"
+        android:visibility="gone"
+        android:paddingHorizontal="32dp">
+
+        <TextView
+            android:id="@+id/tvToolMessage"
+            android:layout_width="wrap_content"
+            android:layout_height="wrap_content"
+            android:maxWidth="300dp"
+            android:padding="10dp"
+            android:background="@drawable/bg_tool_message"
+            android:textColor="@color/teal_200"
+            android:textSize="13sp"
+            android:fontFamily="monospace"
+            android:text="Tool: execute_command\nResult: ..." />
+
+        <TextView
+            android:id="@+id/tvToolTime"
+            android:layout_width="wrap_content"
+            android:layout_height="wrap_content"
+            android:layout_marginTop="4dp"
+            android:textColor="@color/gray_medium"
+            android:textSize="11sp"
+            android:text="12:00" />
+
+    </LinearLayout>
+
+    <!-- System/Error Message -->
+    <TextView
+        android:id="@+id/tvSystemMessage"
+        android:layout_width="match_parent"
+        android:layout_height="wrap_content"
+        android:visibility="gone"
+        android:gravity="center"
+        android:padding="8dp"
+        android:textColor="@color/orange"
+        android:textSize="13sp"
+        android:text="System message" />
+
+</LinearLayout>
