@@ -1,271 +1,243 @@
 package com.sdgclaw
 
+import android.content.Context
 import android.util.Log
 import com.sdgclaw.bridge.TermuxBridge
 import kotlinx.coroutines.CoroutineScope
-import kotlinx.coroutines.channels.Channel
-import kotlinx.coroutines.channels.ReceiveChannel
+import kotlinx.coroutines.Dispatchers
 import kotlinx.coroutines.launch
-import org.json.JSONObject
+import kotlinx.coroutines.withContext
 
 /**
- * AgentLoop - Core agent execution loop
- * Handles the conversation flow between user, LLM, and tools
+ * Core agent loop that orchestrates the conversation between the user, the
+ * LLM, and the tool layer.
+ *
+ * System-prompt injection
+ * ───────────────────────
+ * When [sendUserMessage] is called for the very first turn (i.e. the history
+ * is empty before the user message is added), [AgentLoop] reads the
+ * `system_prompt` key from the `sdgclaw_llm` SharedPreferences.  If the
+ * value is non-empty it is prepended to [conversationHistory] as a
+ * `ChatMessage(role = "system", …)` before the user message.  This means
+ * every subsequent LLM call in the same session sees the system prompt at
+ * position 0 without any further work.
  */
 class AgentLoop(
-    private val coroutineScope: CoroutineScope,
+    private val context: Context,
     private val llmClient: LLMClient,
     private val toolRegistry: ToolRegistry,
-    private val termuxBridge: TermuxBridge
+    private val termuxBridge: TermuxBridge?
 ) {
 
+    // ─────────────────────────────────────────────────────────────────────
+    // Types
+    // ─────────────────────────────────────────────────────────────────────
+
+    data class ChatMessage(
+        val role: String,             // "user" | "assistant" | "tool" | "system"
+        val content: String,
+        val toolCallId: String? = null,
+        val toolName: String?   = null
+    )
+
+    enum class AgentState {
+        IDLE, THINKING, CALLING_TOOL, WAITING_FOR_TOOL, RESPONDING, ERROR
+    }
+
+    // ─────────────────────────────────────────────────────────────────────
+    // Constants
+    // ─────────────────────────────────────────────────────────────────────
+
     companion object {
-        private const val TAG = "AgentLoop"
+        private const val TAG           = "AgentLoop"
         private const val MAX_ITERATIONS = 10
     }
 
-    // Message channels
-    private val userMessages = Channel<String>(Channel.UNLIMITED)
-    private val agentResponses = Channel<String>(Channel.UNLIMITED)
-
+    // ─────────────────────────────────────────────────────────────────────
     // State
-    private var isRunning = false
-    private var conversationHistory = mutableListOf<ChatMessage>()
-    private var currentIteration = 0
-    private val turnVectors = mutableListOf<DoubleArray>()
+    // ─────────────────────────────────────────────────────────────────────
 
-    // Callbacks
-    private var onAgentResponse: ((String) -> Unit)? = null
-    private var onToolCall: ((String, JSONObject) -> Unit)? = null
-    private var onToolResult: ((String, String) -> Unit)? = null
-    private var onError: ((String) -> Unit)? = null
-    private var onStateChange: ((AgentState) -> Unit)? = null
+    private val conversationHistory = mutableListOf<ChatMessage>()
+    private var currentState = AgentState.IDLE
 
-    // Agent states
-    enum class AgentState {
-        IDLE,
-        THINKING,
-        CALLING_TOOL,
-        WAITING_FOR_TOOL,
-        RESPONDING,
-        ERROR
-    }
+    // ─────────────────────────────────────────────────────────────────────
+    // Callbacks (set by the host Activity)
+    // ─────────────────────────────────────────────────────────────────────
 
-    data class ChatMessage(
-        val role: String, // "user", "assistant", "tool", "system"
-        val content: String,
-        val toolCallId: String? = null,
-        val toolName: String? = null
-    )
+    private var onAgentResponse: ((String) -> Unit)?        = null
+    private var onToolCall:      ((String, String) -> Unit)? = null   // (toolName, args)
+    private var onToolResult:    ((String, String) -> Unit)? = null   // (toolName, result)
+    private var onError:         ((String) -> Unit)?        = null
+    private var onStateChange:   ((AgentState) -> Unit)?   = null
 
-    fun start() {
-        if (isRunning) return
-        isRunning = true
-        currentIteration = 0
-        setState(AgentState.IDLE)
+    fun setOnAgentResponse(cb: (String) -> Unit)         { onAgentResponse = cb }
+    fun setOnToolCall(cb: (String, String) -> Unit)      { onToolCall      = cb }
+    fun setOnToolResult(cb: (String, String) -> Unit)    { onToolResult    = cb }
+    fun setOnError(cb: (String) -> Unit)                 { onError         = cb }
+    fun setOnStateChange(cb: (AgentState) -> Unit)       { onStateChange   = cb }
 
-        coroutineScope.launch {
-            processUserMessages()
-        }
+    // ─────────────────────────────────────────────────────────────────────
+    // Public API
+    // ─────────────────────────────────────────────────────────────────────
 
-        Log.d(TAG, "AgentLoop started")
-    }
-
-    fun stop() {
-        isRunning = false
-        userMessages.close()
-        agentResponses.close()
-        Log.d(TAG, "AgentLoop stopped")
-    }
-
-    fun sendUserMessage(message: String) {
-        userMessages.trySend(message)
-    }
-
-    fun getAgentResponses(): ReceiveChannel<String> = agentResponses
-
-    fun setOnAgentResponse(callback: (String) -> Unit) { onAgentResponse = callback }
-    fun setOnToolCall(callback: (String, JSONObject) -> Unit) { onToolCall = callback }
-    fun setOnToolResult(callback: (String, String) -> Unit) { onToolResult = callback }
-    fun setOnError(callback: (String) -> Unit) { onError = callback }
-    fun setOnStateChange(callback: (AgentState) -> Unit) { onStateChange = callback }
-
-    private suspend fun processUserMessages() {
-        for (message in userMessages) {
-            if (!isRunning) break
-            conversationHistory.add(ChatMessage("user", message))
-            coroutineScope.launch { runAgentTurn() }
-        }
-    }
-
-    private suspend fun runAgentTurn() {
-        if (currentIteration >= MAX_ITERATIONS) {
-            handleError("Max iterations reached")
+    /**
+     * Entry point called by [ChatActivity] when the user submits a message.
+     *
+     * On the very first call (empty history) the system prompt stored in
+     * SharedPreferences is injected at position 0 of [conversationHistory]
+     * before the user message is appended.
+     */
+    fun sendUserMessage(userMessage: String, scope: CoroutineScope) {
+        if (currentState != AgentState.IDLE) {
+            Log.w(TAG, "sendUserMessage ignored: agent is not IDLE (state=$currentState)")
             return
         }
 
-        currentIteration++
-        setState(AgentState.THINKING)
+        scope.launch {
+            // ── Inject system prompt on the first turn ─────────────────
+            if (conversationHistory.isEmpty()) {
+                val systemPrompt = readSystemPrompt()
+                if (systemPrompt.isNotEmpty()) {
+                    Log.d(TAG, "Injecting system prompt (${systemPrompt.length} chars)")
+                    conversationHistory.add(
+                        ChatMessage(role = "system", content = systemPrompt)
+                    )
+                }
+            }
 
-        try {
-            val messages = buildLLMMessages()
+            conversationHistory.add(ChatMessage(role = "user", content = userMessage))
+            runAgentTurn()
+        }
+    }
 
-            // Convert tool definitions to LLMClient format
-            val toolDefs = toolRegistry.getToolDefinitions().map { jsonObj ->
-                val fn = jsonObj.getJSONObject("function")
-                LLMClient.ToolDefinition(
-                    function = LLMClient.FunctionDefinition(
-                        name = fn.getString("name"),
-                        description = fn.getString("description"),
-                        parameters = emptyMap() // simplified for now
+    /** Clears the conversation history so the next message starts a fresh session. */
+    fun resetConversation() {
+        conversationHistory.clear()
+        setState(AgentState.IDLE)
+        Log.d(TAG, "Conversation history cleared")
+    }
+
+    /** Returns an unmodifiable snapshot of the current conversation history. */
+    fun getHistory(): List<ChatMessage> = conversationHistory.toList()
+
+    // ─────────────────────────────────────────────────────────────────────
+    // Internal: agent turn
+    // ─────────────────────────────────────────────────────────────────────
+
+    private suspend fun runAgentTurn() {
+        var iterations = 0
+
+        while (iterations < MAX_ITERATIONS) {
+            iterations++
+            Log.d(TAG, "Agent iteration $iterations / $MAX_ITERATIONS")
+
+            setState(AgentState.THINKING)
+
+            val response = withContext(Dispatchers.IO) {
+                try {
+                    llmClient.chat(conversationHistory, toolRegistry.getToolDefinitions())
+                } catch (e: Exception) {
+                    Log.e(TAG, "LLM call failed", e)
+                    null
+                }
+            }
+
+            if (response == null) {
+                setState(AgentState.ERROR)
+                onError?.invoke("LLM request failed. Check your API key and connection.")
+                setState(AgentState.IDLE)
+                return
+            }
+
+            // ── Text response ──────────────────────────────────────────
+            if (response.content.isNotBlank()) {
+                conversationHistory.add(
+                    ChatMessage(role = "assistant", content = response.content)
+                )
+                setState(AgentState.RESPONDING)
+                onAgentResponse?.invoke(response.content)
+            }
+
+            // ── Tool calls ─────────────────────────────────────────────
+            val toolCalls = response.toolCalls
+            if (toolCalls.isNullOrEmpty()) {
+                // No tool calls: the agent is done for this turn.
+                setState(AgentState.IDLE)
+                return
+            }
+
+            setState(AgentState.CALLING_TOOL)
+
+            for (toolCall in toolCalls) {
+                val toolName = toolCall.function.name
+                val toolArgs = toolCall.function.arguments
+
+                Log.d(TAG, "Executing tool: $toolName  args=$toolArgs")
+                onToolCall?.invoke(toolName, toolArgs)
+
+                setState(AgentState.WAITING_FOR_TOOL)
+
+                val toolResult = withContext(Dispatchers.IO) {
+                    try {
+                        toolRegistry.executeTool(toolName, toolArgs)
+                    } catch (e: Exception) {
+                        Log.e(TAG, "Tool execution failed: $toolName", e)
+                        ToolRegistry.ToolResult(
+                            success = false,
+                            output  = "",
+                            error   = "Tool error: ${e.message}"
+                        )
+                    }
+                }
+
+                val resultContent = if (toolResult.success) {
+                    toolResult.output
+                } else {
+                    "ERROR: ${toolResult.error ?: "unknown error"}"
+                }
+
+                onToolResult?.invoke(toolName, resultContent)
+
+                conversationHistory.add(
+                    ChatMessage(
+                        role       = "tool",
+                        content    = resultContent,
+                        toolCallId = toolCall.id,
+                        toolName   = toolName
                     )
                 )
             }
 
-            val chatMessages = messages.map { map ->
-                LLMClient.ChatMessage(
-                    role = map["role"] as String,
-                    content = map["content"] as? String
-                )
-            }
-
-            val result = llmClient.chatCompletion(chatMessages, tools = toolDefs)
-
-            result.fold(
-                onSuccess = { response ->
-                    val choice = response.choices.firstOrNull()
-                    val content = choice?.message?.content ?: ""
-                    val toolCalls = choice?.message?.toolCalls
-
-                    if (!toolCalls.isNullOrEmpty()) {
-                        for (toolCall in toolCalls) {
-                            setState(AgentState.CALLING_TOOL)
-                            val args = try {
-                                JSONObject(toolCall.function.arguments)
-                            } catch (e: Exception) {
-                                JSONObject()
-                            }
-                            onToolCall?.invoke(toolCall.function.name, args)
-
-                            setState(AgentState.WAITING_FOR_TOOL)
-                            val toolResult = toolRegistry.executeTool(toolCall.function.name, args)
-                            onToolResult?.invoke(toolCall.function.name, toolResult)
-
-                            conversationHistory.add(
-                                ChatMessage(
-                                    role = "tool",
-                                    content = toolResult,
-                                    toolCallId = toolCall.id,
-                                    toolName = toolCall.function.name
-                                )
-                            )
-                        }
-                        coroutineScope.launch { runAgentTurn() }
-                    } else {
-                        setState(AgentState.RESPONDING)
-                        conversationHistory.add(ChatMessage("assistant", content))
-                        trackStability(content)
-                        agentResponses.trySend(content)
-                        onAgentResponse?.invoke(content)
-                        setState(AgentState.IDLE)
-                        currentIteration = 0
-                    }
-                },
-                onFailure = { error ->
-                    handleError(error.message ?: "LLM request failed")
-                }
-            )
-
-        } catch (e: Exception) {
-            handleError(e.message ?: "Unknown error")
-        }
-    }
-
-    /**
-     * Cheap stand-in state vector used when real embeddings aren't available
-     * (e.g. Anthropic, which has no embeddings endpoint, or a network failure).
-     */
-    private fun fallbackStatsVector(text: String): DoubleArray {
-        val words = text.trim().split(Regex("\\s+")).filter { it.isNotEmpty() }
-        return doubleArrayOf(
-            text.length.toDouble(),
-            words.size.toDouble(),
-            words.toSet().size.toDouble(),
-            text.count { it in ".,!?;:" }.toDouble()
-        )
-    }
-
-    /**
-     * Records a numeric state vector for this turn's response (real embedding when
-     * the active provider supports it, otherwise a cheap fallback), then runs the
-     * black-box stability diagnostic once there's enough history. If the agent is
-     * detected to be stuck in a limit-cycle, stop early instead of burning through
-     * the remaining iterations.
-     */
-    private suspend fun trackStability(responseText: String) {
-        val vector = llmClient.getEmbedding(responseText).getOrElse { fallbackStatsVector(responseText) }
-        turnVectors.add(vector)
-
-        if (turnVectors.size >= 3) {
-            val report = StabilityDiagnostic.analyze(turnVectors.toTypedArray())
-            Log.d(TAG, "Stability check: regime=${report.regime} (${report.regimeDetail})")
-            if (report.regime == "limit-cycle") {
-                handleError("Stuck oscillating - stopping early (${report.regimeDetail})")
-            }
-        }
-    }
-
-    private fun buildLLMMessages(): List<Map<String, Any>> {
-        val messages = mutableListOf<Map<String, Any>>()
-
-        messages.add(mapOf(
-            "role" to "system",
-            "content" to getSystemPrompt()
-        ))
-
-        val recentHistory = if (conversationHistory.size > 20) {
-            conversationHistory.takeLast(20)
-        } else {
-            conversationHistory
+            // Loop back to send the tool results to the LLM.
         }
 
-        for (msg in recentHistory) {
-            val msgMap = mutableMapOf<String, Any>(
-                "role" to msg.role,
-                "content" to msg.content
-            )
-            msg.toolCallId?.let { msgMap["tool_call_id"] = it }
-            msg.toolName?.let { msgMap["name"] = it }
-            messages.add(msgMap)
-        }
-
-        return messages
-    }
-
-    private fun getSystemPrompt(): String {
-        return """You are SDG Claw, an AI assistant running on Android with access to a Termux backend.
-You can execute commands, manage files, and perform various tasks through the available tools.
-Be helpful, concise, and explain what you're doing when using tools.""".trimIndent()
-    }
-
-    private fun handleError(error: String) {
-        Log.e(TAG, "Agent error: $error")
+        // Iteration cap reached
+        Log.w(TAG, "MAX_ITERATIONS ($MAX_ITERATIONS) reached — stopping agent turn")
         setState(AgentState.ERROR)
-        onError?.invoke(error)
-        agentResponses.trySend("Error: $error")
-        currentIteration = 0
+        onError?.invoke("Agent reached the maximum number of iterations ($MAX_ITERATIONS).")
         setState(AgentState.IDLE)
     }
 
-    private fun setState(state: AgentState) {
-        onStateChange?.invoke(state)
+    // ─────────────────────────────────────────────────────────────────────
+    // Helpers
+    // ─────────────────────────────────────────────────────────────────────
+
+    /**
+     * Reads the system prompt from SharedPreferences.
+     * Returns an empty string if none has been set.
+     */
+    private fun readSystemPrompt(): String {
+        return try {
+            val prefs = context.getSharedPreferences("sdgclaw_llm", Context.MODE_PRIVATE)
+            prefs.getString(SettingsActivity.KEY_SYSTEM_PROMPT, "") ?: ""
+        } catch (e: Exception) {
+            Log.e(TAG, "Failed to read system prompt", e)
+            ""
+        }
     }
 
-    fun clearHistory() {
-        conversationHistory.clear()
-        turnVectors.clear()
-        currentIteration = 0
+    private fun setState(newState: AgentState) {
+        currentState = newState
+        onStateChange?.invoke(newState)
     }
-
-    fun getHistory(): List<ChatMessage> = conversationHistory.toList()
 }
