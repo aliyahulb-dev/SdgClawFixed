@@ -1,36 +1,35 @@
 <?xml version="1.0" encoding="utf-8"?>
 <resources>
+    <!-- Base dark theme palette -->
+    <color name="surface_dark">#121212</color>
+    <color name="card_bg">#1E1E1E</color>
+    <color name="gray_dark">#2C2C2C</color>
+    <color name="gray_medium">#5C5C5C</color>
+    <color name="gray_light">#9E9E9E</color>
+    <color name="white">#FFFFFF</color>
+    <color name="black">#000000</color>
 
-    <!-- ── Base palette ─────────────────────────────────────────────────────── -->
-    <color name="colorPrimary">#6C63FF</color>
-    <color name="colorPrimaryVariant">#3700B3</color>
-    <color name="colorSecondary">#03DAC6</color>
-    <color name="colorOnPrimary">#FFFFFF</color>
+    <!-- Primary / accent -->
+    <color name="accent_blue">#1976D2</color>
+    <color name="purple_200">#FFBB86FC</color>
+    <color name="purple_500">#FF6200EE</color>
+    <color name="purple_700">#FF3700B3</color>
+    <color name="teal_200">#FF03DAC5</color>
+    <color name="teal_700">#FF018786</color>
 
-    <!-- ── Surface / background ─────────────────────────────────────────────── -->
-    <color name="surface_dark">#12141C</color>
-    <color name="card_bg">#1A1D27</color>
+    <!-- Text -->
+    <color name="text_primary">#FFFFFFFF</color>
+    <color name="text_secondary">#B3FFFFFF</color>
+    <color name="text_hint">#66FFFFFF</color>
 
-    <!-- ── Grays ─────────────────────────────────────────────────────────────── -->
-    <color name="gray_dark">#2A2F45</color>
-    <color name="gray_medium">#8B8FA8</color>
-    <color name="gray_light">#C5C8D8</color>
+    <!-- Status / feedback -->
+    <color name="red_error">#D32F2F</color>
+    <color name="green_ok">#388E3C</color>
+    <color name="yellow_warn">#F9A825</color>
 
-    <!-- ── Message bubble backgrounds ───────────────────────────────────────── -->
-    <color name="bubble_user">#6C63FF</color>
-    <color name="bubble_assistant">#1E2130</color>
-    <color name="bubble_tool">#1A2E2A</color>
-
-    <!-- ── Stability dashboard chip colours ─────────────────────────────────── -->
-    <!--   converging  → green   -->
-    <color name="chip_converging">#1E7A3E</color>
-    <!--   diverging   → red     -->
-    <color name="chip_diverging">#B71C1C</color>
-    <!--   limit-cycle → amber   -->
-    <color name="chip_limit_cycle">#E65100</color>
-    <!--   chaotic     → deep purple -->
-    <color name="chip_chaotic">#4A148C</color>
-    <!--   unknown / insufficient data → gray -->
-    <color name="chip_unknown">#37474F</color>
-
+    <!-- Stability regime badge colors -->
+    <color name="regime_converging">#388E3C</color>
+    <color name="regime_diverging">#D32F2F</color>
+    <color name="regime_limit_cycle">#F9A825</color>
+    <color name="regime_chaotic">#E64A19</color>
 </resources>

@@ -10,6 +10,7 @@ set -euo pipefail
 # Helpers
 # ---------------------------------------------------------------------------
 info()  { echo "[INFO]  $*"; }
+warn()  { echo "[WARN]  $*" >&2; }
 error() { echo "[ERROR] $*" >&2; }
 
 # ---------------------------------------------------------------------------
@@ -17,6 +18,11 @@ error() { echo "[ERROR] $*" >&2; }
 # ---------------------------------------------------------------------------
 BRANCH=$(git rev-parse --abbrev-ref HEAD)
 info "Current branch: ${BRANCH}"
+
+# Guard against accidental pushes to protected branches
+if [[ "${BRANCH}" == "main" ]]; then
+    warn "You are on 'main'. Proceed with caution."
+fi
 
 # ---------------------------------------------------------------------------
 # 2. Build the commit message
@@ -42,6 +48,10 @@ if git diff --cached --quiet; then
     exit 0
 fi
 
+# Show a summary of what will be committed
+info "Staged files:"
+git diff --cached --name-status | sed 's/^/    /'
+
 # ---------------------------------------------------------------------------
 # 4. Commit
 # ---------------------------------------------------------------------------
@@ -64,17 +74,15 @@ fi
 # ---------------------------------------------------------------------------
 # 6. Verify success
 # ---------------------------------------------------------------------------
-PUSH_OUTPUT=$(git push origin "${BRANCH}" --dry-run 2>&1 || true)
-
-# The previous push already succeeded; just confirm the ref is up to date.
 REMOTE_SHA=$(git ls-remote origin "refs/heads/${BRANCH}" | awk '{print $1}')
 LOCAL_SHA=$(git rev-parse HEAD)
 
 if [[ "${REMOTE_SHA}" == "${LOCAL_SHA}" ]]; then
     info "✅  Push successful. Remote branch '${BRANCH}' is now at ${LOCAL_SHA}."
 else
-    info "Remote SHA : ${REMOTE_SHA}"
-    info "Local  SHA : ${LOCAL_SHA}"
-    info "ℹ️  SHAs differ — this can happen if the dry-run above showed 'Everything up-to-date'."
-    info "   The initial push completed successfully."
+    warn "Remote SHA : ${REMOTE_SHA}"
+    warn "Local  SHA : ${LOCAL_SHA}"
+    warn "SHAs differ — this can happen if a concurrent push moved the remote tip."
+    warn "Run 'git status' and 'git log --oneline -5' to investigate."
+    exit 1
 fi
