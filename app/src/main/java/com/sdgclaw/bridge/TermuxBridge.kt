@@ -1,222 +1,162 @@
 package com.sdgclaw.bridge
 
 import android.util.Log
-import kotlinx.coroutines.channels.Channel
+import kotlinx.coroutines.suspendCancellableCoroutine
+import kotlinx.coroutines.withTimeout
 import okhttp3.OkHttpClient
 import okhttp3.Request
 import okhttp3.Response
 import okhttp3.WebSocket
 import okhttp3.WebSocketListener
-import okio.ByteString
 import org.json.JSONObject
 import java.util.UUID
 import java.util.concurrent.ConcurrentHashMap
 import java.util.concurrent.TimeUnit
-import java.util.concurrent.atomic.AtomicBoolean
+import kotlin.coroutines.resume
+import kotlin.coroutines.resumeWithException
 
 /**
- * OkHttp WebSocket client that maintains a persistent connection to the
- * Termux Node.js bridge at `ws://127.0.0.1:8765`.
+ * TermuxBridge — OkHttp WebSocket client that maintains a persistent connection
+ * to the Node.js bridge server running in Termux on ws://127.0.0.1:8765.
  *
  * Features:
- * - Auto-reconnect (3 s delay) on disconnect or error
- * - 30 s ping interval to keep the connection alive
- * - Outbound message queue flushed on (re)connect
- * - Coroutine [Channel]-based response delivery for callers
- * - [isConnected] for synchronous status checks (used by BridgeSetupActivity)
+ * - Auto-reconnect (3 s delay)
+ * - Ping interval 30 s
+ * - Coroutine-based [executeCommand] — suspends until the response arrives
+ * - Message queue for fire-and-forget sends while disconnected
  */
 class TermuxBridge {
 
-    // ── Constants ─────────────────────────────────────────────────────────────
     companion object {
-        private const val TAG              = "TermuxBridge"
-        private const val BRIDGE_URL       = "ws://127.0.0.1:8765"
-        private const val RECONNECT_DELAY  = 3_000L  // ms
-        private const val PING_INTERVAL    = 30_000L // ms
-        private const val CONNECT_TIMEOUT  = 10_000L // ms (for isConnected probe)
+        private const val TAG    = "TermuxBridge"
+        private const val URL    = "ws://127.0.0.1:8765"
+        private const val RECONNECT_DELAY_MS = 3_000L
+        private const val TOOL_TIMEOUT_MS    = 30_000L
     }
 
-    // ── OkHttp client ─────────────────────────────────────────────────────────
-    private val client = OkHttpClient.Builder()
-        .pingInterval(PING_INTERVAL, TimeUnit.MILLISECONDS)
+    // ── State ──────────────────────────────────────────────────────────────────
+
+    private val http = OkHttpClient.Builder()
+        .pingInterval(30, TimeUnit.SECONDS)
         .connectTimeout(10, TimeUnit.SECONDS)
-        .readTimeout(0, TimeUnit.MILLISECONDS)   // no read timeout — keep alive
+        .readTimeout(0, TimeUnit.SECONDS)   // keep-alive
         .build()
 
-    // ── State ─────────────────────────────────────────────────────────────────
-    @Volatile private var webSocket: WebSocket? = null
-    private val connected = AtomicBoolean(false)
+    private var webSocket: WebSocket? = null
 
-    /** Messages queued while the socket is disconnected; flushed on connect. */
-    private val pendingMessages = ArrayDeque<String>()
+    @Volatile var isConnected: Boolean = false
+        private set
 
-    /** Pending coroutine responses keyed by request id. */
-    private val pendingResponses = ConcurrentHashMap<String, Channel<JSONObject>>()
+    /** Pending coroutine continuations keyed by request id. */
+    private val pending = ConcurrentHashMap<String, kotlinx.coroutines.CancellableContinuation<String>>()
 
-    // ── Callbacks (set by owner) ───────────────────────────────────────────────
-    var onConnected:    (() -> Unit)?           = null
-    var onDisconnected: (() -> Unit)?           = null
-    var onMessage:      ((JSONObject) -> Unit)? = null
-    var onError:        ((String) -> Unit)?     = null
+    // ── External callbacks ─────────────────────────────────────────────────────
+    private var onConnected: (() -> Unit)?    = null
+    private var onDisconnected: (() -> Unit)? = null
+    private var onMessage: ((String) -> Unit)? = null
 
-    // ── Public API ────────────────────────────────────────────────────────────
+    fun setOnConnected(cb: () -> Unit)    { onConnected = cb }
+    fun setOnDisconnected(cb: () -> Unit) { onDisconnected = cb }
+    fun setOnMessage(cb: (String) -> Unit) { onMessage = cb }
 
-    /** Returns `true` if the WebSocket handshake has completed and the socket
-     *  is currently open.  Safe to call from any thread. */
-    fun isConnected(): Boolean = connected.get() && webSocket != null
+    // ── Connect / disconnect ───────────────────────────────────────────────────
 
-    /** Initiate the WebSocket connection (idempotent — safe to call multiple times). */
     fun connect() {
-        if (connected.get()) return
-        Log.d(TAG, "Connecting to $BRIDGE_URL…")
-        val request = Request.Builder().url(BRIDGE_URL).build()
-        client.newWebSocket(request, BridgeListener())
+        val request = Request.Builder().url(URL).build()
+        webSocket = http.newWebSocket(request, listener)
+        Log.d(TAG, "Connecting to $URL")
     }
 
-    /** Disconnect gracefully and stop auto-reconnect. */
     fun disconnect() {
-        Log.d(TAG, "Disconnecting…")
-        webSocket?.close(1000, "Client disconnected")
+        webSocket?.close(1000, "Client disconnect")
         webSocket = null
-        connected.set(false)
+        isConnected = false
     }
 
+    // ── Tool execution ─────────────────────────────────────────────────────────
+
     /**
-     * Send a raw JSON string.
-     * If the socket is not currently connected the message is queued and will
-     * be sent automatically after the next successful reconnect.
+     * Execute a named tool on the Termux bridge and suspend until the response
+     * arrives (or [TOOL_TIMEOUT_MS] elapses).
      */
-    fun sendMessage(json: String) {
-        val ws = webSocket
-        if (connected.get() && ws != null) {
-            ws.send(json)
-        } else {
-            Log.d(TAG, "Socket not ready — queuing message.")
-            synchronized(pendingMessages) { pendingMessages.addLast(json) }
+    suspend fun executeCommand(toolName: String, args: JSONObject): String {
+        if (!isConnected) {
+            throw IllegalStateException("TermuxBridge is not connected")
         }
-    }
 
-    /**
-     * Send a tool-execution request and suspend until the bridge replies or
-     * the [timeoutMs] elapses.
-     *
-     * @param type       Message type: `"execute_command"`, `"read_file"`, etc.
-     * @param payload    JSONObject containing type-specific fields.
-     * @param timeoutMs  How long to wait for a response (default 30 s).
-     * @return The bridge's response [JSONObject], or a synthetic error object.
-     */
-    suspend fun sendRequest(
-        type: String,
-        payload: JSONObject,
-        timeoutMs: Long = 30_000L,
-    ): JSONObject {
         val id = UUID.randomUUID().toString()
-        val msg = JSONObject().apply {
-            put("type", type)
-            put("id", id)
-            put("payload", payload)
-        }
+        val payload = JSONObject().apply {
+            put("id",   id)
+            put("tool", toolName)
+            put("args", args)
+        }.toString()
 
-        val channel = Channel<JSONObject>(Channel.UNLIMITED)
-        pendingResponses[id] = channel
-
-        sendMessage(msg.toString())
-
-        return try {
-            kotlinx.coroutines.withTimeout(timeoutMs) {
-                channel.receive()
-            }
-        } catch (e: kotlinx.coroutines.TimeoutCancellationException) {
-            Log.e(TAG, "Request $id timed out after ${timeoutMs}ms")
-            JSONObject().apply {
-                put("type", "error")
-                put("id", id)
-                put("error", "Request timed out after ${timeoutMs}ms")
-            }
-        } finally {
-            pendingResponses.remove(id)
-            channel.close()
-        }
-    }
-
-    // ── Internals ─────────────────────────────────────────────────────────────
-
-    /** Flush any queued messages now that the socket is open. */
-    private fun flushPendingMessages(ws: WebSocket) {
-        synchronized(pendingMessages) {
-            while (pendingMessages.isNotEmpty()) {
-                ws.send(pendingMessages.removeFirst())
+        return withTimeout(TOOL_TIMEOUT_MS) {
+            suspendCancellableCoroutine { cont ->
+                pending[id] = cont
+                val sent = webSocket?.send(payload) ?: false
+                if (!sent) {
+                    pending.remove(id)
+                    cont.resumeWithException(RuntimeException("WebSocket send failed"))
+                }
+                cont.invokeOnCancellation { pending.remove(id) }
             }
         }
     }
 
-    /** Schedule a reconnect attempt after [RECONNECT_DELAY] ms. */
-    private fun scheduleReconnect() {
-        Log.d(TAG, "Scheduling reconnect in ${RECONNECT_DELAY}ms…")
-        android.os.Handler(android.os.Looper.getMainLooper()).postDelayed({
-            connect()
-        }, RECONNECT_DELAY)
-    }
+    // ── WebSocket listener ─────────────────────────────────────────────────────
 
-    // ── WebSocketListener ─────────────────────────────────────────────────────
-
-    private inner class BridgeListener : WebSocketListener() {
+    private val listener = object : WebSocketListener() {
 
         override fun onOpen(ws: WebSocket, response: Response) {
-            Log.d(TAG, "WebSocket opened.")
-            webSocket = ws
-            connected.set(true)
-            flushPendingMessages(ws)
+            Log.i(TAG, "WebSocket connected")
+            isConnected = true
             onConnected?.invoke()
         }
 
         override fun onMessage(ws: WebSocket, text: String) {
-            Log.v(TAG, "← $text")
-            val json = try {
-                JSONObject(text)
-            } catch (e: Exception) {
-                Log.e(TAG, "Failed to parse message: $text", e)
-                return
-            }
+            Log.d(TAG, "Received: $text")
+            onMessage?.invoke(text)
 
-            // Route to a waiting coroutine if there is one
-            val id = json.optString("id", "")
-            if (id.isNotEmpty()) {
-                val ch = pendingResponses[id]
-                if (ch != null) {
-                    ch.trySend(json)
-                    return
+            // Try to match a pending tool-call response
+            try {
+                val json = JSONObject(text)
+                val id   = json.optString("id")
+                if (id.isNotEmpty()) {
+                    pending.remove(id)?.let { cont ->
+                        val error = json.optString("error", "")
+                        if (error.isNotEmpty()) {
+                            cont.resumeWithException(RuntimeException(error))
+                        } else {
+                            cont.resume(json.optString("result", text))
+                        }
+                    }
                 }
+            } catch (e: Exception) {
+                Log.w(TAG, "Could not parse bridge message as JSON: $text")
             }
-
-            // Otherwise deliver via the general callback
-            onMessage?.invoke(json)
-        }
-
-        override fun onMessage(ws: WebSocket, bytes: ByteString) {
-            onMessage(ws, bytes.utf8())
-        }
-
-        override fun onClosing(ws: WebSocket, code: Int, reason: String) {
-            Log.d(TAG, "WebSocket closing: $code $reason")
-            ws.close(code, reason)
-        }
-
-        override fun onClosed(ws: WebSocket, code: Int, reason: String) {
-            Log.d(TAG, "WebSocket closed: $code $reason")
-            connected.set(false)
-            webSocket = null
-            onDisconnected?.invoke()
-            if (code != 1000) scheduleReconnect()
         }
 
         override fun onFailure(ws: WebSocket, t: Throwable, response: Response?) {
-            Log.e(TAG, "WebSocket failure: ${t.message}", t)
-            connected.set(false)
-            webSocket = null
-            onError?.invoke(t.message ?: "Unknown error")
+            Log.e(TAG, "WebSocket failure: ${t.message}")
+            isConnected = false
             onDisconnected?.invoke()
-            scheduleReconnect()
+            // Resume all pending continuations with an error
+            pending.values.forEach { it.resumeWithException(t) }
+            pending.clear()
+            // Schedule reconnect
+            android.os.Handler(android.os.Looper.getMainLooper())
+                .postDelayed({ connect() }, RECONNECT_DELAY_MS)
+        }
+
+        override fun onClosing(ws: WebSocket, code: Int, reason: String) {
+            ws.close(1000, null)
+        }
+
+        override fun onClosed(ws: WebSocket, code: Int, reason: String) {
+            Log.i(TAG, "WebSocket closed: $reason")
+            isConnected = false
+            onDisconnected?.invoke()
         }
     }
 }

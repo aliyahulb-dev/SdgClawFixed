@@ -39,6 +39,7 @@
 | **Deep-Link Layer** | `TermuxDeepLinkHelper` — fires `Intent.ACTION_VIEW` deep links into Termux to auto-start the bridge server |
 | **Polling Layer** | `BridgePollingStateMachine` — state machine that monitors bridge connectivity and triggers recovery actions |
 | **Diagnostics** | `StabilityDiagnostic` — pure-Kotlin agent trajectory analysis (no external deps) |
+| **Dashboard Layer** | `StabilityDashboardView` — live in-chat overlay displaying real-time `StabilityDiagnostic` metrics |
 | **Application** | `SDGClawApplication` — singleton Application class; owns `TermuxBridge` lifecycle |
 | **Assets** | `setup.sh` — bundled shell script asset for automated Termux bridge installation |
 
@@ -52,13 +53,14 @@
 |---|---|
 | `SDGClawApplication.kt` | Application singleton; initializes and auto-connects `TermuxBridge`; exposes bridge and `CoroutineScope` to activities; starts `BridgePollingStateMachine` on app launch |
 | `MainActivity.kt` | Home screen; shows connection status; buttons for Test Connection, Settings, Chat, and Setup Bridge; observes polling state machine status |
-| `ChatActivity.kt` | Chat UI using `RecyclerView`; initializes `AgentLoop`, `LLMClient`, `ToolRegistry`; wires agent callbacks to UI; injects system prompt from SharedPreferences into `AgentLoop` |
+| `ChatActivity.kt` | Chat UI using `RecyclerView`; initializes `AgentLoop`, `LLMClient`, `ToolRegistry`; wires agent callbacks to UI; injects system prompt from SharedPreferences into `AgentLoop`; hosts and updates `StabilityDashboardView` overlay; feeds agent trajectory snapshots to `StabilityDiagnostic` after each agent step and reflects results in the dashboard |
 | `AgentLoop.kt` | Core agent loop; manages `conversationHistory`, iterates LLM↔tool calls up to `MAX_ITERATIONS=10`; emits state via callbacks (`onAgentResponse`, `onToolCall`, `onToolResult`, `onError`, `onStateChange`); accepts system prompt as constructor parameter |
 | `LLMClient.kt` | Multi-provider LLM HTTP client using OkHttp; handles OpenAI, Anthropic, Google Gemini, and custom OpenAI-compatible endpoints; reads API keys from SharedPreferences |
 | `ToolRegistry.kt` | Registers local tools (Kotlin lambdas) and remote tools (via Termux bridge); `executeTool()` dispatches by tool type |
 | `SettingsActivity.kt` | UI for configuring API keys, model names per provider, active provider selection, and system prompt; saves to SharedPreferences |
 | `BridgeSetupActivity.kt` | Step-by-step guided setup wizard for the Termux WebSocket bridge; walks the user through installing Termux, Node.js, copying bridge files, and starting the server; copies bundled `setup.sh` from assets and provides a way to deploy it; verifies connection at the end |
 | `StabilityDiagnostic.kt` | Pure Kotlin implementation of blackbox agent stability analysis; classifies trajectory as converging/diverging/limit-cycle/chaotic using drift and Shannon entropy metrics |
+| `ui/StabilityDashboardView.kt` | Custom `View` (or `ViewGroup`) that renders a live mini-dashboard inside `ChatActivity`; displays regime badge, drift sparkline, entropy sparkline, S-score, step counter, and last-updated timestamp; updated by calling `updateReport(report: StabilityDiagnostic.Report)` from the UI thread; collapsed/expanded toggle via a chevron button |
 | `bridge/TermuxBridge.kt` | OkHttp WebSocket client; connects to `ws://127.0.0.1:8765`; auto-reconnect (3s delay); ping interval 30s; queues messages when disconnected |
 | `bridge/TermuxDeepLinkHelper.kt` | Fires `termux://` or `Intent.ACTION_VIEW` deep-link intents to launch Termux and run a command (e.g., start the bridge server); used by `BridgePollingStateMachine` during recovery |
 | `bridge/BridgePollingStateMachine.kt` | Finite state machine that polls bridge health on a configurable interval; transitions through states (`DISCONNECTED`, `CONNECTING`, `CONNECTED`, `RECOVERING`); triggers deep-link recovery when disconnected; exposes `StateFlow<PollingState>` for UI observation |
@@ -80,15 +82,17 @@
 
 | Path | Role |
 |---|---|
-| `layout/activity_chat.xml` | Chat screen layout with `RecyclerView`, input bar, typing indicator |
+| `layout/activity_chat.xml` | Chat screen layout with `RecyclerView`, input bar, typing indicator, and `StabilityDashboardView` overlay anchored at top of chat area |
 | `layout/activity_main.xml` | Home screen layout; includes Setup Bridge button entry point and polling status indicator |
 | `layout/activity_settings.xml` | Settings screen layout with TextInputEditText fields per provider, plus system prompt multi-line editor |
 | `layout/activity_bridge_setup.xml` | Bridge setup wizard layout; contains step indicator, step content area (ScrollView with per-step instructions and code blocks), navigation buttons (Back/Next/Finish), and a connection status indicator on the final step |
 | `layout/item_message.xml` | Individual chat message bubble layout |
+| `layout/view_stability_dashboard.xml` | Layout for `StabilityDashboardView`; contains regime badge (`TextView`), S-score label, drift sparkline (`View` / canvas-drawn), entropy sparkline, step counter, last-updated label, and a collapse/expand chevron `ImageButton` |
 | `drawable/bg_*.xml` | Rounded rectangle backgrounds for message bubbles (assistant, user, tool) and inputs |
-| `values/colors.xml` | Dark-theme color palette (`surface_dark`, `card_bg`, `gray_dark`, `gray_medium`, etc.) |
+| `drawable/bg_regime_*.xml` | Tinted pill/badge backgrounds for each regime type (`converging` = green, `diverging` = red, `limit-cycle` = yellow, `chaotic` = orange); used by the stability dashboard regime badge |
+| `values/colors.xml` | Dark-theme color palette (`surface_dark`, `card_bg`, `gray_dark`, `gray_medium`, etc.); extended with regime colors (`regime_converging`, `regime_diverging`, `regime_limit_cycle`, `regime_chaotic`) |
 | `values/themes.xml` | `Theme.SDGClaw` and `Theme.SDGClaw.NoActionBar` (Material Design 3) |
-| `values/strings.xml` | App strings including all bridge setup step titles, instructions, and code snippet strings |
+| `values/strings.xml` | App strings including all bridge setup step titles, instructions, and code snippet strings; extended with stability dashboard labels (`str_regime`, `str_s_score`, `str_drift`, `str_entropy`, `str_steps`) |
 
 ### Build Files
 
@@ -105,7 +109,7 @@
 |---|---|
 | **Language** | Kotlin (Android app), JavaScript/Node.js (Termux bridge), Shell (setup script) |
 | **Android SDK** | API 34 (target), Material Design 3 |
-| **UI** | ViewBinding / DataBinding, RecyclerView, AppCompat, Material Components |
+| **UI** | ViewBinding / DataBinding, RecyclerView, AppCompat, Material Components, custom `View` subclasses with `Canvas` drawing |
 | **Networking** | OkHttp (HTTP + WebSocket client) |
 | **Serialization** | `kotlinx.serialization` (JSON) |
 | **Async** | Kotlin Coroutines (`CoroutineScope`, `Channel`, `StateFlow`, `Dispatchers.IO/Main`) |
@@ -193,6 +197,16 @@ data class PollingStatus(
 // Exposed as StateFlow<PollingStatus> for UI observation
 ```
 
+### `StabilityDashboardView`
+```kotlin
+// Custom View located in ui/StabilityDashboardView.kt
+// State is held internally; updated via:
+fun updateReport(report: StabilityDiagnostic.Report)
+// Sparkline history is accumulated internally (ring buffer, max ~50 points)
+// Collapsed state toggled by user tap on chevron; persists for the Activity lifetime
+var isCollapsed: Boolean  // backed by instance field; no SharedPreferences persistence
+```
+
 ---
 
 ## Coding Conventions
@@ -213,23 +227,8 @@ data class PollingStatus(
 - Maximum 10 agent iterations per turn (`MAX_ITERATIONS = 10`)
 - System prompt is stored in SharedPreferences under a dedicated key and read in `ChatActivity` before constructing `AgentLoop`; it is injected into the conversation history as a `ChatMessage("system", ...)` prepended to every turn
 
-### Termux Deep-Link Pattern (`TermuxDeepLinkHelper`)
-- Termux exposes a `termux://` URI scheme and `com.termux.RUN_COMMAND` intent that allow external apps to run commands inside Termux without user interaction (requires the `com.termux.permission.RUN_COMMAND` permission and Termux:API or allow-external-apps setting)
-- `TermuxDeepLinkHelper` encapsulates intent construction; callers pass a shell command string and the helper fires it via `startActivity` or `sendBroadcast` depending on availability
-- Deep links are used as a recovery mechanism by `BridgePollingStateMachine`: when the bridge is found to be unreachable, the state machine fires a deep link to start/restart the Node.js server in Termux automatically
-- The `QUERY_ALL_PACKAGES` or explicit package check is used to verify Termux is installed before attempting the deep link; if not installed, the state machine surfaces a `DISCONNECTED` status and prompts the user to complete setup
-- Deep-link firing is always performed on `Dispatchers.Main` (as `startActivity` must run on the main thread); the surrounding polling coroutine switches context accordingly
-
-### Bridge Polling State Machine Pattern (`BridgePollingStateMachine`)
-- Implemented as a pure state machine class (no Android framework dependencies except `Context` for deep links); injectable and testable
-- Polling runs on a `CoroutineScope` provided by the caller (typically `SDGClawApplication`'s scope); uses `delay()` between poll cycles rather than a `Timer` or `Handler`
-- Configurable poll interval (default: 10 seconds when `CONNECTED`, 3 seconds when `RECOVERING` or `CONNECTING`)
-- Health check is a lightweight WebSocket ping or HTTP probe to `ws://127.0.0.1:8765`; success transitions to `CONNECTED`, failure to `DISCONNECTED` / `RECOVERING`
-- Recovery strategy: on first disconnect, immediately attempt deep-link restart; subsequent failures increment `recoveryAttempts`; after a configurable max (e.g., 3), the machine stays in `DISCONNECTED` and requires manual user action
-- `StateFlow<PollingStatus>` exposed publicly; activities and `MainActivity` collect this flow inside `lifecycleScope` using `repeatOnLifecycle(Lifecycle.State.STARTED)` to update status badges/icons reactively
-- State transitions are serialized (only one coroutine drives the machine); no additional mutex needed because the polling loop is a single sequential coroutine
-
-### Asset Bundling Pattern (`setup.sh`)
-- Shell scripts and other static deployment files are bundled in `app/src/main/assets/` so they are included in the APK and accessible at runtime via `Context.assets`
-- At runtime, the activity (typically `BridgeSetupActivity`) opens the asset with `assets.open("setup.sh")` and copies it to an accessible path (e.g., `/sdcard/sdgclaw-setup/setup.sh`) using standard `InputStream`/`FileOutputStream` with a byte-buffer copy loop; this runs on `Dispatchers.IO`
-- After copying, the UI displays the target path and instructs the user to run the script in Termux; a "Copy Path" or "Copy Command" button provides the exact command (e.g., `bash /sdcard/sdgclaw-setup/setup.sh`) to the
+### Stability Dashboard Pattern (`StabilityDashboardView` + `ChatActivity`)
+- `StabilityDashboardView` is a self-contained custom `View` (subclass of `LinearLayout` or `FrameLayout`) inflated from `layout/view_stability_dashboard.xml`; it owns all drawing logic and state
+- `ChatActivity` maintains a `trajectoryPoints: MutableList<List<Double>>` that accumulates a numeric embedding of each agent step (e.g., token-length vector of the last assistant message + tool results); after each agent step callback (`onAgentResponse`, `onToolResult`) it calls `StabilityDiagnostic.analyze(trajectoryPoints)` on `Dispatchers.Default` and posts the resulting `Report` to the main thread via `withContext(Dispatchers.Main) { dashboard.updateReport(report) }`
+- Sparklines are drawn using `Canvas.drawPolyline` / `Path` inside `StabilityDashboardView.onDraw()`; the view calls `invalidate()` after `updateReport()` to trigger a redraw
+- Regime badge background is swapped by calling `view.background = ContextCompat.get

@@ -1,8 +1,9 @@
 <?xml version="1.0" encoding="utf-8"?>
 <resources>
-
-    <!-- Step-indicator dot size and spacing -->
-    <dimen name="dot_size">10dp</dimen>
-    <dimen name="dot_margin">5dp</dimen>
-
+    <!--
+        dashboard_peek_height
+        Height of the Stability Dashboard bottom sheet when in COLLAPSED state.
+        Tall enough to show the drag handle + chip row.
+    -->
+    <dimen name="dashboard_peek_height">112dp</dimen>
 </resources>

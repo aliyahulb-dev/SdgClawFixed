@@ -2,6 +2,7 @@ package com.sdgclaw
 
 import android.app.Application
 import android.util.Log
+import com.sdgclaw.bridge.BridgePollingStateMachine
 import com.sdgclaw.bridge.TermuxBridge
 import kotlinx.coroutines.CoroutineScope
 import kotlinx.coroutines.Dispatchers
@@ -10,13 +11,8 @@ import kotlinx.coroutines.SupervisorJob
 /**
  * SDGClawApplication — singleton Application class.
  *
- * Owns the [TermuxBridge] lifecycle so that a single WebSocket connection is
- * shared across all Activities.  Activities retrieve the bridge via:
- *
- *     (application as SDGClawApplication).bridge
- *
- * A [CoroutineScope] backed by [SupervisorJob] is exposed for app-wide
- * background work that outlives any individual Activity.
+ * Owns the [TermuxBridge] and [BridgePollingStateMachine] lifecycles;
+ * exposes them to Activities via typed cast of [getApplication()].
  */
 class SDGClawApplication : Application() {
 
@@ -24,39 +20,28 @@ class SDGClawApplication : Application() {
         private const val TAG = "SDGClawApplication"
     }
 
-    // ── App-wide coroutine scope ───────────────────────────────────────────
+    /** Application-scoped coroutine scope (survives Activity recreation). */
     val appScope = CoroutineScope(SupervisorJob() + Dispatchers.Main)
 
-    // ── Termux bridge (single shared instance) ────────────────────────────
-    lateinit var bridge: TermuxBridge
+    private lateinit var termuxBridge: TermuxBridge
+    lateinit var pollingStateMachine: BridgePollingStateMachine
         private set
-
-    // ── Lifecycle ─────────────────────────────────────────────────────────
 
     override fun onCreate() {
         super.onCreate()
-        Log.d(TAG, "Application created.")
+        Log.i(TAG, "onCreate — initialising bridge")
 
-        bridge = TermuxBridge()
+        termuxBridge = TermuxBridge()
+        termuxBridge.connect()
 
-        // Set up bridge callbacks before attempting to connect
-        bridge.onConnected = {
-            Log.d(TAG, "Bridge connected.")
-        }
-        bridge.onDisconnected = {
-            Log.d(TAG, "Bridge disconnected.")
-        }
-        bridge.onError = { err ->
-            Log.e(TAG, "Bridge error: $err")
-        }
-
-        // Attempt initial connection; bridge will auto-reconnect on failure
-        bridge.connect()
+        pollingStateMachine = BridgePollingStateMachine(
+            context      = this,
+            bridge       = termuxBridge,
+            coroutineScope = appScope
+        )
+        pollingStateMachine.start()
     }
 
-    override fun onTerminate() {
-        super.onTerminate()
-        Log.d(TAG, "Application terminating — disconnecting bridge.")
-        bridge.disconnect()
-    }
+    /** Retrieve the singleton [TermuxBridge] instance. */
+    fun getTermuxBridge(): TermuxBridge = termuxBridge
 }
