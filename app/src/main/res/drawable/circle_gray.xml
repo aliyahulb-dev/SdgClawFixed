@@ -1,8 +1,8 @@
 <?xml version="1.0" encoding="utf-8"?>
-<!-- Filled red circle — used for disconnected / error status indicator -->
+<!-- Filled gray circle — used for inactive step dots and neutral status indicator -->
 <shape xmlns:android="http://schemas.android.com/apk/res/android"
     android:shape="oval">
-    <solid android:color="@color/red_error" />
+    <solid android:color="@color/gray_light" />
     <size
         android:width="10dp"
         android:height="10dp" />

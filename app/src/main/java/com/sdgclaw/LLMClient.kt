@@ -2,395 +2,287 @@ package com.sdgclaw
 
 import android.content.Context
 import android.util.Log
-import kotlinx.coroutines.Dispatchers
-import kotlinx.coroutines.withContext
-import kotlinx.serialization.Serializable
-import kotlinx.serialization.encodeToString
-import kotlinx.serialization.json.Json
 import okhttp3.MediaType.Companion.toMediaType
 import okhttp3.OkHttpClient
 import okhttp3.Request
 import okhttp3.RequestBody.Companion.toRequestBody
+import org.json.JSONArray
+import org.json.JSONObject
 import java.util.concurrent.TimeUnit
 
 /**
- * LLMClient - Multi-provider LLM client
- * Supports: OpenAI, Anthropic, Google Gemini, Custom OpenAI-compatible endpoints
+ * LLMClient — multi-provider HTTP client.
+ *
+ * Supported providers: OpenAI, Anthropic, Google Gemini, Custom (OpenAI-compatible).
+ * Provider selection and API keys are read from SharedPreferences.
  */
-class LLMClient(
-    private val context: Context
-) {
+class LLMClient(private val context: Context) {
 
     companion object {
         private const val TAG = "LLMClient"
-        private val JSON_MEDIA_TYPE = "application/json; charset=utf-8".toMediaType()
+        private const val PREFS = "sdgclaw_prefs"
+        private val JSON_MEDIA = "application/json; charset=utf-8".toMediaType()
     }
 
-    enum class ProviderType {
-        OPENAI,
-        ANTHROPIC,
-        GOOGLE,
-        CUSTOM
-    }
+    // ── Wire-format models ─────────────────────────────────────────────────────
 
-    data class ProviderConfig(
-        val type: ProviderType,
-        val name: String,
-        val apiKey: String = "",
-        val baseUrl: String = "",
-        val defaultModel: String = "",
-        val enabled: Boolean = true,
-        val customHeaders: Map<String, String> = emptyMap()
-    )
-
-    @Serializable
     data class ChatMessage(
         val role: String,
-        val content: String? = null,
-        val toolCalls: List<ToolCall>? = null,
-        val toolCallId: String? = null,
-        val name: String? = null
+        val content: String
     )
 
-    @Serializable
-    data class ToolCall(
+    data class ToolCallResult(
         val id: String,
-        val type: String = "function",
-        val function: FunctionCall
-    )
-
-    @Serializable
-    data class FunctionCall(
         val name: String,
         val arguments: String
     )
 
-    @Serializable
-    data class ToolDefinition(
-        val type: String = "function",
-        val function: FunctionDefinition
-    )
-
-    @Serializable
-    data class FunctionDefinition(
-        val name: String,
-        val description: String,
-        val parameters: Map<String, String> = emptyMap()
-    )
-
-    @Serializable
-    data class ChatRequest(
-        val model: String,
-        val messages: List<ChatMessage>,
-        val tools: List<ToolDefinition>? = null,
-        val temperature: Float = 0.7f,
-        val max_tokens: Int? = null
-    )
-
-    @Serializable
     data class ChatResponse(
-        val id: String = "",
-        val choices: List<Choice> = emptyList(),
-        val model: String? = null
+        val content: String?,
+        val toolCalls: List<ToolCallResult> = emptyList()
     )
 
-    @Serializable
-    data class Choice(
-        val index: Int = 0,
-        val message: ChatMessage,
-        val finish_reason: String? = null
-    )
+    // ── OkHttp client ──────────────────────────────────────────────────────────
 
-    private val httpClient = OkHttpClient.Builder()
+    private val http = OkHttpClient.Builder()
         .connectTimeout(30, TimeUnit.SECONDS)
-        .readTimeout(120, TimeUnit.SECONDS)
+        .readTimeout(60, TimeUnit.SECONDS)
         .writeTimeout(30, TimeUnit.SECONDS)
         .build()
 
-    private val json = Json {
-        ignoreUnknownKeys = true
-        encodeDefaults = false
-    }
-
-    private var providers = mutableMapOf<ProviderType, ProviderConfig>()
-    private var activeProvider: ProviderType = ProviderType.OPENAI
-
-    init {
-        loadProvidersFromSettings()
-    }
-
-    fun setActiveProvider(type: ProviderType) {
-        activeProvider = type
-        Log.d(TAG, "Active provider: $type")
-    }
-
-    fun getActiveProvider(): ProviderConfig? = providers[activeProvider]
-
-    fun getProviders(): Map<ProviderType, ProviderConfig> = providers.toMap()
-
-    fun updateProvider(config: ProviderConfig) {
-        providers[config.type] = config
-        saveProvidersToSettings()
-    }
-
-    suspend fun chatCompletion(
-        messages: List<ChatMessage>,
-        model: String? = null,
-        tools: List<ToolDefinition>? = null,
-        temperature: Float = 0.7f,
-        maxTokens: Int? = null
-    ): Result<ChatResponse> {
-        val provider = getActiveProvider()
-            ?: return Result.failure(Exception("No active provider configured. Please add an API key in Settings."))
-
-        val requestModel = model ?: provider.defaultModel
-        if (requestModel.isBlank()) {
-            return Result.failure(Exception("No model specified for ${provider.name}"))
-        }
-
-        return withContext(Dispatchers.IO) {
-            try {
-                val response = sendRequest(provider, requestModel, messages, tools, temperature, maxTokens)
-                Result.success(response)
-            } catch (e: Exception) {
-                Log.e(TAG, "Chat completion failed", e)
-                Result.failure(e)
-            }
-        }
-    }
-
-    private fun sendRequest(
-        provider: ProviderConfig,
-        model: String,
-        messages: List<ChatMessage>,
-        tools: List<ToolDefinition>?,
-        temperature: Float,
-        maxTokens: Int?
-    ): ChatResponse {
-        val url = buildRequestUrl(provider, model)
-
-        val chatRequest = ChatRequest(
-            model = model,
-            messages = messages,
-            tools = if (tools.isNullOrEmpty()) null else tools,
-            temperature = temperature,
-            max_tokens = maxTokens
-        )
-
-        val body = json.encodeToString(chatRequest).toRequestBody(JSON_MEDIA_TYPE)
-
-        val requestBuilder = Request.Builder()
-            .url(url)
-            .addHeader("Content-Type", "application/json")
-            .post(body)
-
-        // Auth headers
-        when (provider.type) {
-            ProviderType.ANTHROPIC -> {
-                requestBuilder.addHeader("x-api-key", provider.apiKey)
-                requestBuilder.addHeader("anthropic-version", "2023-06-01")
-            }
-            ProviderType.GOOGLE -> {
-                // Key is in URL for Google
-            }
-            else -> {
-                requestBuilder.addHeader("Authorization", "Bearer ${provider.apiKey}")
-            }
-        }
-
-        provider.customHeaders.forEach { (k, v) -> requestBuilder.addHeader(k, v) }
-
-        httpClient.newCall(requestBuilder.build()).execute().use { response ->
-            val responseBody = response.body?.string() ?: throw Exception("Empty response")
-            if (!response.isSuccessful) {
-                throw Exception("HTTP ${response.code}: $responseBody")
-            }
-            return json.decodeFromString<ChatResponse>(responseBody)
-        }
-    }
-
-    private fun buildRequestUrl(provider: ProviderConfig, model: String): String {
-        return when (provider.type) {
-            ProviderType.OPENAI -> {
-                val base = provider.baseUrl.ifBlank { "https://api.openai.com" }
-                "$base/v1/chat/completions"
-            }
-            ProviderType.ANTHROPIC -> {
-                val base = provider.baseUrl.ifBlank { "https://api.anthropic.com" }
-                "$base/v1/messages"
-            }
-            ProviderType.GOOGLE -> {
-                val base = provider.baseUrl.ifBlank { "https://generativelanguage.googleapis.com" }
-                "$base/v1beta/models/$model:generateContent?key=${provider.apiKey}"
-            }
-            ProviderType.CUSTOM -> {
-                provider.baseUrl.ifBlank { throw Exception("Custom provider requires a base URL") }
-            }
-        }
-    }
-
-    private fun loadProvidersFromSettings() {
-        val prefs = context.getSharedPreferences("sdgclaw_llm", Context.MODE_PRIVATE)
-
-        val openaiKey = prefs.getString("openai_key", "") ?: ""
-        if (openaiKey.isNotBlank()) {
-            providers[ProviderType.OPENAI] = ProviderConfig(
-                type = ProviderType.OPENAI,
-                name = "OpenAI",
-                apiKey = openaiKey,
-                defaultModel = prefs.getString("openai_model", "gpt-4o-mini") ?: "gpt-4o-mini",
-                enabled = true
-            )
-        }
-
-        val anthropicKey = prefs.getString("anthropic_key", "") ?: ""
-        if (anthropicKey.isNotBlank()) {
-            providers[ProviderType.ANTHROPIC] = ProviderConfig(
-                type = ProviderType.ANTHROPIC,
-                name = "Anthropic",
-                apiKey = anthropicKey,
-                defaultModel = prefs.getString("anthropic_model", "claude-sonnet-4-6") ?: "claude-sonnet-4-6",
-                enabled = true
-            )
-        }
-
-        val googleKey = prefs.getString("google_key", "") ?: ""
-        if (googleKey.isNotBlank()) {
-            providers[ProviderType.GOOGLE] = ProviderConfig(
-                type = ProviderType.GOOGLE,
-                name = "Google Gemini",
-                apiKey = googleKey,
-                defaultModel = prefs.getString("google_model", "gemini-1.5-flash") ?: "gemini-1.5-flash",
-                enabled = true
-            )
-        }
-
-        val customUrl = prefs.getString("custom_url", "") ?: ""
-        val customKey = prefs.getString("custom_key", "") ?: ""
-        if (customUrl.isNotBlank() && customKey.isNotBlank()) {
-            providers[ProviderType.CUSTOM] = ProviderConfig(
-                type = ProviderType.CUSTOM,
-                name = prefs.getString("custom_name", "Custom") ?: "Custom",
-                apiKey = customKey,
-                baseUrl = customUrl,
-                defaultModel = prefs.getString("custom_model", "") ?: "",
-                enabled = true
-            )
-        }
-
-        // Set default active provider
-        activeProvider = when {
-            providers[ProviderType.OPENAI] != null -> ProviderType.OPENAI
-            providers[ProviderType.ANTHROPIC] != null -> ProviderType.ANTHROPIC
-            providers[ProviderType.GOOGLE] != null -> ProviderType.GOOGLE
-            providers[ProviderType.CUSTOM] != null -> ProviderType.CUSTOM
-            else -> ProviderType.OPENAI
-        }
-
-        Log.d(TAG, "Loaded ${providers.size} providers, active: $activeProvider")
-    }
-
-    private fun saveProvidersToSettings() {
-        val prefs = context.getSharedPreferences("sdgclaw_llm", Context.MODE_PRIVATE).edit()
-
-        providers.forEach { (type, config) ->
-            val prefix = when (type) {
-                ProviderType.OPENAI -> "openai"
-                ProviderType.ANTHROPIC -> "anthropic"
-                ProviderType.GOOGLE -> "google"
-                ProviderType.CUSTOM -> "custom"
-            }
-            prefs.putString("${prefix}_key", config.apiKey)
-            prefs.putString("${prefix}_model", config.defaultModel)
-            prefs.putBoolean("${prefix}_enabled", config.enabled)
-            if (type == ProviderType.CUSTOM) {
-                prefs.putString("custom_url", config.baseUrl)
-                prefs.putString("custom_name", config.name)
-            }
-        }
-
-        prefs.apply()
-    }
+    // ── Public API ─────────────────────────────────────────────────────────────
 
     /**
-     * Returns a real embedding vector for the given text where the active provider
-     * supports it (OpenAI, Google, and Custom OpenAI-compatible endpoints).
-     * Anthropic has no embeddings endpoint, so this always fails for that provider -
-     * callers should catch that and fall back to a cheap stand-in vector instead.
+     * Send a chat completion request to the configured provider.
+     *
+     * @param messages  Conversation history (role + content pairs).
+     * @param tools     Tool definitions expressed as [ToolDefinition] objects.
+     * @return          [ChatResponse] with either a text reply or a list of tool calls.
      */
-    suspend fun getEmbedding(text: String): Result<DoubleArray> {
-        val provider = getActiveProvider()
-            ?: return Result.failure(Exception("No active provider configured."))
+    suspend fun chat(
+        messages: List<ChatMessage>,
+        tools: List<ToolDefinition> = emptyList()
+    ): ChatResponse {
+        val prefs = context.getSharedPreferences(PREFS, Context.MODE_PRIVATE)
+        val provider = prefs.getString("active_provider", "openai") ?: "openai"
 
-        return withContext(Dispatchers.IO) {
-            try {
-                when (provider.type) {
-                    ProviderType.OPENAI, ProviderType.CUSTOM -> {
-                        val base = provider.baseUrl.ifBlank { "https://api.openai.com" }
-                        val body = """{"model":"text-embedding-3-small","input":${json.encodeToString(text)}}"""
-                            .toRequestBody(JSON_MEDIA_TYPE)
-                        val req = Request.Builder()
-                            .url("$base/v1/embeddings")
-                            .addHeader("Authorization", "Bearer ${provider.apiKey}")
-                            .addHeader("Content-Type", "application/json")
-                            .post(body)
-                            .build()
-                        httpClient.newCall(req).execute().use { resp ->
-                            val respBody = resp.body?.string() ?: throw Exception("Empty response")
-                            if (!resp.isSuccessful) throw Exception("HTTP ${resp.code}: $respBody")
-                            val obj = org.json.JSONObject(respBody)
-                            val arr = obj.getJSONArray("data").getJSONObject(0).getJSONArray("embedding")
-                            Result.success(DoubleArray(arr.length()) { arr.getDouble(it) })
-                        }
-                    }
-                    ProviderType.GOOGLE -> {
-                        val base = provider.baseUrl.ifBlank { "https://generativelanguage.googleapis.com" }
-                        val body = """{"content":{"parts":[{"text":${json.encodeToString(text)}}]}}"""
-                            .toRequestBody(JSON_MEDIA_TYPE)
-                        val req = Request.Builder()
-                            .url("$base/v1beta/models/embedding-001:embedContent?key=${provider.apiKey}")
-                            .addHeader("Content-Type", "application/json")
-                            .post(body)
-                            .build()
-                        httpClient.newCall(req).execute().use { resp ->
-                            val respBody = resp.body?.string() ?: throw Exception("Empty response")
-                            if (!resp.isSuccessful) throw Exception("HTTP ${resp.code}: $respBody")
-                            val obj = org.json.JSONObject(respBody)
-                            val arr = obj.getJSONObject("embedding").getJSONArray("values")
-                            Result.success(DoubleArray(arr.length()) { arr.getDouble(it) })
-                        }
-                    }
-                    ProviderType.ANTHROPIC -> Result.failure(Exception("Anthropic has no embeddings endpoint"))
-                }
-            } catch (e: Exception) {
-                Result.failure(e)
-            }
+        return when (provider.lowercase()) {
+            "anthropic" -> chatAnthropic(messages, tools, prefs)
+            "google"    -> chatGoogle(messages, tools, prefs)
+            "custom"    -> chatOpenAiCompatible(messages, tools, prefs,
+                baseUrl  = prefs.getString("custom_base_url", "https://api.openai.com/v1") ?: "",
+                apiKey   = prefs.getString("custom_api_key", "") ?: "",
+                model    = prefs.getString("custom_model", "gpt-4o") ?: "gpt-4o"
+            )
+            else        -> chatOpenAiCompatible(messages, tools, prefs,
+                baseUrl  = "https://api.openai.com/v1",
+                apiKey   = prefs.getString("openai_api_key", "") ?: "",
+                model    = prefs.getString("openai_model", "gpt-4o") ?: "gpt-4o"
+            )
         }
     }
 
-    suspend fun testProvider(type: ProviderType): Result<String> {
-        val provider = providers[type]
-            ?: return Result.failure(Exception("Provider not configured"))
+    // ── OpenAI / OpenAI-compatible ─────────────────────────────────────────────
 
-        val testMessage = listOf(ChatMessage(role = "user", content = "Say OK"))
-
-        return withContext(Dispatchers.IO) {
-            try {
-                val originalActive = activeProvider
-                activeProvider = type
-                val result = chatCompletion(testMessage, maxTokens = 10)
-                activeProvider = originalActive
-
-                result.fold(
-                    onSuccess = { response ->
-                        val text = response.choices.firstOrNull()?.message?.content ?: "No response"
-                        Result.success(text)
-                    },
-                    onFailure = { Result.failure(it) }
-                )
-            } catch (e: Exception) {
-                Result.failure(e)
+    private fun chatOpenAiCompatible(
+        messages: List<ChatMessage>,
+        tools: List<ToolDefinition>,
+        prefs: android.content.SharedPreferences,
+        baseUrl: String,
+        apiKey: String,
+        model: String
+    ): ChatResponse {
+        val body = JSONObject().apply {
+            put("model", model)
+            put("messages", JSONArray().apply {
+                messages.forEach { m ->
+                    put(JSONObject().apply {
+                        put("role", m.role)
+                        put("content", m.content)
+                    })
+                }
+            })
+            if (tools.isNotEmpty()) {
+                put("tools", JSONArray().apply {
+                    tools.forEach { t ->
+                        put(JSONObject().apply {
+                            put("type", "function")
+                            put("function", JSONObject().apply {
+                                put("name", t.name)
+                                put("description", t.description)
+                                put("parameters", t.parameters)
+                            })
+                        })
+                    }
+                })
+                put("tool_choice", "auto")
             }
         }
+
+        val request = Request.Builder()
+            .url("$baseUrl/chat/completions")
+            .addHeader("Authorization", "Bearer $apiKey")
+            .addHeader("Content-Type", "application/json")
+            .post(body.toString().toRequestBody(JSON_MEDIA))
+            .build()
+
+        http.newCall(request).execute().use { resp ->
+            val bodyStr = resp.body?.string() ?: throw RuntimeException("Empty response from LLM")
+            if (!resp.isSuccessful) {
+                throw RuntimeException("LLM HTTP ${resp.code}: $bodyStr")
+            }
+            return parseOpenAiResponse(bodyStr)
+        }
+    }
+
+    private fun parseOpenAiResponse(json: String): ChatResponse {
+        val root    = JSONObject(json)
+        val choices = root.getJSONArray("choices")
+        val message = choices.getJSONObject(0).getJSONObject("message")
+        val content = message.optString("content", null.toString()).let {
+            if (it == "null" || it.isEmpty()) null else it
+        }
+
+        val toolCalls = mutableListOf<ToolCallResult>()
+        val tcArray = message.optJSONArray("tool_calls")
+        if (tcArray != null) {
+            for (i in 0 until tcArray.length()) {
+                val tc   = tcArray.getJSONObject(i)
+                val func = tc.getJSONObject("function")
+                toolCalls.add(
+                    ToolCallResult(
+                        id        = tc.optString("id", "tc_$i"),
+                        name      = func.getString("name"),
+                        arguments = func.getString("arguments")
+                    )
+                )
+            }
+        }
+
+        return ChatResponse(content = content, toolCalls = toolCalls)
+    }
+
+    // ── Anthropic Claude ───────────────────────────────────────────────────────
+
+    private fun chatAnthropic(
+        messages: List<ChatMessage>,
+        tools: List<ToolDefinition>,
+        prefs: android.content.SharedPreferences
+    ): ChatResponse {
+        val apiKey = prefs.getString("anthropic_api_key", "") ?: ""
+        val model  = prefs.getString("anthropic_model", "claude-3-5-sonnet-20241022") ?: ""
+
+        // Separate system message(s) from the rest
+        val systemText = messages.filter { it.role == "system" }.joinToString("\n") { it.content }
+        val userMessages = messages.filter { it.role != "system" }
+
+        val body = JSONObject().apply {
+            put("model", model)
+            put("max_tokens", 8192)
+            if (systemText.isNotBlank()) put("system", systemText)
+            put("messages", JSONArray().apply {
+                userMessages.forEach { m ->
+                    put(JSONObject().apply {
+                        put("role", if (m.role == "tool") "user" else m.role)
+                        put("content", m.content)
+                    })
+                }
+            })
+            if (tools.isNotEmpty()) {
+                put("tools", JSONArray().apply {
+                    tools.forEach { t ->
+                        put(JSONObject().apply {
+                            put("name", t.name)
+                            put("description", t.description)
+                            put("input_schema", t.parameters)
+                        })
+                    }
+                })
+            }
+        }
+
+        val request = Request.Builder()
+            .url("https://api.anthropic.com/v1/messages")
+            .addHeader("x-api-key", apiKey)
+            .addHeader("anthropic-version", "2023-06-01")
+            .addHeader("Content-Type", "application/json")
+            .post(body.toString().toRequestBody(JSON_MEDIA))
+            .build()
+
+        http.newCall(request).execute().use { resp ->
+            val bodyStr = resp.body?.string() ?: throw RuntimeException("Empty response")
+            if (!resp.isSuccessful) throw RuntimeException("Anthropic HTTP ${resp.code}: $bodyStr")
+            return parseAnthropicResponse(bodyStr)
+        }
+    }
+
+    private fun parseAnthropicResponse(json: String): ChatResponse {
+        val root    = JSONObject(json)
+        val content = root.getJSONArray("content")
+        var text: String? = null
+        val toolCalls = mutableListOf<ToolCallResult>()
+
+        for (i in 0 until content.length()) {
+            val block = content.getJSONObject(i)
+            when (block.optString("type")) {
+                "text"       -> text = block.optString("text")
+                "tool_use"   -> toolCalls.add(
+                    ToolCallResult(
+                        id        = block.optString("id", "tc_$i"),
+                        name      = block.getString("name"),
+                        arguments = block.optJSONObject("input")?.toString() ?: "{}"
+                    )
+                )
+            }
+        }
+        return ChatResponse(content = text, toolCalls = toolCalls)
+    }
+
+    // ── Google Gemini ──────────────────────────────────────────────────────────
+
+    private fun chatGoogle(
+        messages: List<ChatMessage>,
+        tools: List<ToolDefinition>,
+        prefs: android.content.SharedPreferences
+    ): ChatResponse {
+        val apiKey = prefs.getString("google_api_key", "") ?: ""
+        val model  = prefs.getString("google_model", "gemini-1.5-pro") ?: "gemini-1.5-pro"
+
+        val contents = JSONArray().apply {
+            messages.filter { it.role != "system" }.forEach { m ->
+                put(JSONObject().apply {
+                    put("role", if (m.role == "assistant") "model" else "user")
+                    put("parts", JSONArray().apply {
+                        put(JSONObject().apply { put("text", m.content) })
+                    })
+                })
+            }
+        }
+
+        val body = JSONObject().apply {
+            put("contents", contents)
+        }
+
+        val url = "https://generativelanguage.googleapis.com/v1beta/models/$model:generateContent?key=$apiKey"
+        val request = Request.Builder()
+            .url(url)
+            .addHeader("Content-Type", "application/json")
+            .post(body.toString().toRequestBody(JSON_MEDIA))
+            .build()
+
+        http.newCall(request).execute().use { resp ->
+            val bodyStr = resp.body?.string() ?: throw RuntimeException("Empty response")
+            if (!resp.isSuccessful) throw RuntimeException("Google HTTP ${resp.code}: $bodyStr")
+            return parseGoogleResponse(bodyStr)
+        }
+    }
+
+    private fun parseGoogleResponse(json: String): ChatResponse {
+        val root     = JSONObject(json)
+        val cands    = root.getJSONArray("candidates")
+        val content  = cands.getJSONObject(0).getJSONObject("content")
+        val parts    = content.getJSONArray("parts")
+        val text     = parts.getJSONObject(0).optString("text")
+        return ChatResponse(content = text.ifBlank { null })
     }
 }

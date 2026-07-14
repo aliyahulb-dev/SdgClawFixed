@@ -1,33 +1,47 @@
 package com.sdgclaw
 
 import android.app.Application
+import android.util.Log
+import com.sdgclaw.bridge.BridgePollingStateMachine
 import com.sdgclaw.bridge.TermuxBridge
 import kotlinx.coroutines.CoroutineScope
 import kotlinx.coroutines.Dispatchers
 import kotlinx.coroutines.SupervisorJob
 
+/**
+ * SDGClawApplication — singleton Application class.
+ *
+ * Owns the [TermuxBridge] and [BridgePollingStateMachine] lifecycles;
+ * exposes them to Activities via typed cast of [getApplication()].
+ */
 class SDGClawApplication : Application() {
 
-    private val coroutineScope = CoroutineScope(SupervisorJob() + Dispatchers.Main)
+    companion object {
+        private const val TAG = "SDGClawApplication"
+    }
 
-    private var termuxBridge: TermuxBridge? = null
+    /** Application-scoped coroutine scope (survives Activity recreation). */
+    val appScope = CoroutineScope(SupervisorJob() + Dispatchers.Main)
+
+    private lateinit var termuxBridge: TermuxBridge
+    lateinit var pollingStateMachine: BridgePollingStateMachine
+        private set
 
     override fun onCreate() {
         super.onCreate()
+        Log.i(TAG, "onCreate — initialising bridge")
 
-        // Initialize Termux Bridge
-        termuxBridge = TermuxBridge(this, coroutineScope)
+        termuxBridge = TermuxBridge()
+        termuxBridge.connect()
 
-        // Auto-connect to bridge on app start
-        termuxBridge?.connect()
+        pollingStateMachine = BridgePollingStateMachine(
+            context      = this,
+            bridge       = termuxBridge,
+            coroutineScope = appScope
+        )
+        pollingStateMachine.start()
     }
 
-    fun getTermuxBridge(): TermuxBridge? = termuxBridge
-
-    fun getCoroutineScope(): CoroutineScope = coroutineScope
-
-    override fun onTerminate() {
-        termuxBridge?.disconnect()
-        super.onTerminate()
-    }
+    /** Retrieve the singleton [TermuxBridge] instance. */
+    fun getTermuxBridge(): TermuxBridge = termuxBridge
 }

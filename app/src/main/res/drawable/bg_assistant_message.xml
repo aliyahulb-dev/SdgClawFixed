@@ -1,11 +1,14 @@
 <?xml version="1.0" encoding="utf-8"?>
+<!--
+  bg_assistant_message.xml
+  Assistant message bubble — bottom-left corner flat, others rounded.
+-->
 <shape xmlns:android="http://schemas.android.com/apk/res/android"
     android:shape="rectangle">
-    <solid android:color="@color/surface_dark" />
+    <solid android:color="@color/bubble_assistant" />
     <corners
-        android:topLeftRadius="18dp"
-        android:topRightRadius="18dp"
-        android:bottomLeftRadius="4dp"
-        android:bottomRightRadius="18dp" />
-    <stroke android:width="1dp" android:color="@color/gray_dark" />
+        android:topLeftRadius="16dp"
+        android:topRightRadius="16dp"
+        android:bottomRightRadius="16dp"
+        android:bottomLeftRadius="2dp" />
 </shape>

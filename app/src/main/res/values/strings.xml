@@ -1,21 +1,116 @@
 <?xml version="1.0" encoding="utf-8"?>
 <resources>
+
+    <!-- ── App ──────────────────────────────────────────────────────────── -->
     <string name="app_name">SDG Claw</string>
-    <string name="connection_status_connected">Connected</string>
-    <string name="connection_status_disconnected">Disconnected</string>
-    <string name="connection_status_connecting">Connecting...</string>
-    <string name="btn_test_connection">Test Bridge Connection</string>
-    <string name="btn_chat">Open Chat</string>
-    <string name="btn_settings">Settings</string>
-    <string name="log_initial">SDG Claw - Log Output\nWaiting for connection...</string>
-    <string name="bridge_url">ws://127.0.0.1:8765</string>
+
+    <!-- ── MainActivity ─────────────────────────────────────────────────── -->
+    <string name="main_title">SDG Claw</string>
+    <string name="main_subtitle">AI Agent for Android</string>
+    <string name="main_btn_chat">Start Chat</string>
+    <string name="main_btn_settings">Settings</string>
+    <string name="main_btn_setup_bridge">Setup Bridge</string>
+    <string name="main_btn_test_connection">Test Connection</string>
+    <string name="main_status_connected">Bridge Connected</string>
+    <string name="main_status_disconnected">Bridge Disconnected</string>
+    <string name="main_status_connecting">Connecting…</string>
+
+    <!-- ── ChatActivity ──────────────────────────────────────────────────── -->
+    <string name="chat_hint">Type a message…</string>
+    <string name="chat_btn_send">Send</string>
+    <string name="chat_title">Chat</string>
+    <string name="chat_typing">Thinking…</string>
+
+    <!-- ── SettingsActivity ──────────────────────────────────────────────── -->
     <string name="settings_title">Settings</string>
-    <string name="api_key_openai">OpenAI API Key</string>
-    <string name="api_key_anthropic">Anthropic API Key</string>
-    <string name="api_key_google">Google API Key</string>
-    <string name="api_key_custom">Custom Endpoint API Key</string>
-    <string name="custom_endpoint">Custom Endpoint URL</string>
-    <string name="model_name">Model Name</string>
-    <string name="save">Save</string>
-    <string name="cancel">Cancel</string>
+    <string name="settings_openai_key_hint">OpenAI API Key</string>
+    <string name="settings_openai_model_hint">Model (e.g. gpt-4o)</string>
+    <string name="settings_anthropic_key_hint">Anthropic API Key</string>
+    <string name="settings_anthropic_model_hint">Model (e.g. claude-3-5-sonnet-20241022)</string>
+    <string name="settings_google_key_hint">Google API Key</string>
+    <string name="settings_google_model_hint">Model (e.g. gemini-1.5-pro)</string>
+    <string name="settings_custom_url_hint">Custom Base URL</string>
+    <string name="settings_custom_key_hint">Custom API Key</string>
+    <string name="settings_custom_model_hint">Custom Model Name</string>
+    <string name="settings_active_provider_label">Active Provider</string>
+    <string name="settings_system_prompt_hint">System prompt (optional — defines agent behaviour)</string>
+    <string name="settings_btn_save">Save</string>
+    <string name="settings_saved">Settings saved</string>
+
+    <!-- ── BridgeSetupActivity — generic ─────────────────────────────────── -->
+    <string name="setup_title">Bridge Setup</string>
+    <!-- runtime format: "Step 2 of 5" -->
+    <string name="setup_step_counter">Step %1$d of %2$d</string>
+    <!-- static placeholder shown before the activity initialises -->
+    <string name="setup_step_counter_placeholder">Step 1 of 5</string>
+    <string name="setup_code_label">Command</string>
+    <string name="setup_script_path_label">Script copied to:</string>
+    <string name="setup_script_copied">✓ Script copied successfully.</string>
+    <string name="setup_script_copy_failed">✗ Failed to copy script. Check storage permissions.</string>
+
+    <!-- Polling / status strings -->
+    <!-- %1$d = seconds remaining -->
+    <string name="setup_polling">⏳ Waiting… (%1$d s remaining)</string>
+    <string name="setup_poll_done">✓ Condition verified!</string>
+    <string name="setup_poll_timeout">✗ Timed out. Please retry or check Termux.</string>
+
+    <!-- Connection status card (final step) -->
+    <string name="setup_connection_waiting">Waiting for bridge connection…</string>
+    <string name="setup_connection_success">✓ Bridge connected successfully!</string>
+    <string name="setup_connection_failed">✗ Could not connect to bridge.</string>
+    <string name="setup_connection_timeout">✗ Connection timed out. Is the server running?</string>
+    <string name="setup_connection_icon_desc">Connection status icon</string>
+
+    <!-- Termux not installed -->
+    <string name="setup_termux_not_installed">Termux is not installed. Please install it from F-Droid first.</string>
+
+    <!-- Clipboard -->
+    <string name="setup_copied_to_clipboard">Copied to clipboard</string>
+
+    <!-- Navigation buttons -->
+    <string name="setup_btn_back">Back</string>
+    <string name="setup_btn_cancel">Cancel</string>
+    <string name="setup_btn_next">Next</string>
+    <string name="setup_btn_finish">Finish</string>
+    <string name="setup_btn_verify">Verify Connection</string>
+    <string name="setup_btn_copy_code">Copy Command</string>
+
+    <!-- ── BridgeSetupActivity — Step 1: Install Termux ─────────────────── -->
+    <string name="setup_step1_title">Install Termux</string>
+    <string name="setup_step1_desc">SDG Claw uses a Node.js WebSocket server running inside Termux to
+execute shell commands on your device.\n\nInstall Termux from F-Droid (not the Play Store — the Play Store
+version is outdated and lacks package management).\n\n1. Open F-Droid on your device.\n2. Search for
+"Termux".\n3. Install and open it at least once so it initialises its package database.</string>
+
+    <!-- ── BridgeSetupActivity — Step 2: Install Node.js ────────────────── -->
+    <string name="setup_step2_title">Install Node.js in Termux</string>
+    <string name="setup_step2_desc">Open Termux and run the following commands to update the package
+list and install Node.js.\n\nThis may take a few minutes depending on your internet speed.</string>
+    <string name="setup_step2_code">pkg update -y &amp;&amp; pkg upgrade -y &amp;&amp; pkg install nodejs -y</string>
+
+    <!-- ── BridgeSetupActivity — Step 3: Copy setup script ───────────────── -->
+    <string name="setup_step3_title">Prepare Setup Script</string>
+    <string name="setup_step3_desc">The SDG Claw setup script will now be copied to your device storage.
+This script creates the bridge directory, writes the Node.js server file, installs the required
+npm package, and starts the server.\n\nNo action needed — the copy happens automatically. The path
+will appear below once complete.</string>
+
+    <!-- ── BridgeSetupActivity — Step 4: Run setup.sh ────────────────────── -->
+    <string name="setup_step4_title">Run the Setup Script in Termux</string>
+    <string name="setup_step4_desc">Termux will open automatically. Copy and paste the command below
+into the Termux terminal, then press Enter.\n\nThe script will:\n• Create ~/sdgclaw-bridge/\n•
+Write server.js\n• Run npm install ws\n• Start the WebSocket server on port 8765\n\nOnce the script
+is running you will see "[SDG Claw Bridge] Listening on ws://127.0.0.1:8765".</string>
+    <!-- %s will be replaced at runtime with the actual path from filesDir -->
+    <string name="setup_step4_code">bash &lt;path-to-setup.sh&gt;</string>
+
+    <!-- ── BridgeSetupActivity — Step 5: Verify connection ───────────────── -->
+    <string name="setup_step5_title">Verify Connection</string>
+    <string name="setup_step5_desc">Keep the Termux session open with the server running, then tap
+"Verify Connection" below.\n\nSDG Claw will attempt to connect to the bridge at
+ws://127.0.0.1:8765 and report the result.\n\nIf the connection fails:\n• Ensure the Termux
+terminal shows the "[SDG Claw Bridge] Listening" message.\n• Try running the server manually with
+the command below.\n• Make sure no firewall or VPN is blocking 127.0.0.1:8765.</string>
+    <string name="setup_step5_code">node ~/sdgclaw-bridge/server.js</string>
+
 </resources>

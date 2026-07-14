@@ -1,6 +1,9 @@
 <?xml version="1.0" encoding="utf-8"?>
+<!-- Filled green circle — used for connected status indicator and completed step dots -->
 <shape xmlns:android="http://schemas.android.com/apk/res/android"
     android:shape="oval">
-    <solid android:color="@color/green" />
-    <size android:width="16dp" android:height="16dp" />
+    <solid android:color="@color/green_connected" />
+    <size
+        android:width="10dp"
+        android:height="10dp" />
 </shape>
