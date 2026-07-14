@@ -1,67 +1,86 @@
 <?xml version="1.0" encoding="utf-8"?>
 <resources>
+
+    <!-- ── App ─────────────────────────────────────────────────────────────── -->
     <string name="app_name">SDG Claw</string>
 
-    <!-- MainActivity -->
-    <string name="main_title">SDG Claw</string>
-    <string name="main_subtitle">AI Agent</string>
-    <string name="status_connected">Connected</string>
-    <string name="status_disconnected">Disconnected</string>
-    <string name="btn_test_connection">Test Connection</string>
+    <!-- ── MainActivity ────────────────────────────────────────────────────── -->
+    <string name="btn_chat">Chat</string>
     <string name="btn_settings">Settings</string>
-    <string name="btn_chat">Start Chat</string>
-    <string name="btn_setup_bridge">Set Up Bridge</string>
-    <string name="bridge_disconnected_hint">Termux bridge is not connected. Tap to set up.</string>
+    <string name="btn_test_connection">Test Connection</string>
+    <string name="btn_setup_bridge">Setup Bridge</string>
+    <string name="status_connected">Bridge connected</string>
+    <string name="status_disconnected">Bridge not connected</string>
 
-    <!-- SettingsActivity -->
-    <string name="settings_title">Settings</string>
-    <string name="settings_openai_key_hint">OpenAI API Key</string>
-    <string name="settings_openai_model_hint">Model (e.g. gpt-4o)</string>
-    <string name="settings_anthropic_key_hint">Anthropic API Key</string>
-    <string name="settings_anthropic_model_hint">Model (e.g. claude-3-5-sonnet-20241022)</string>
-    <string name="settings_google_key_hint">Google API Key</string>
-    <string name="settings_google_model_hint">Model (e.g. gemini-1.5-pro)</string>
-    <string name="settings_custom_name_hint">Provider Name</string>
-    <string name="settings_custom_url_hint">Base URL</string>
-    <string name="settings_custom_key_hint">API Key</string>
-    <string name="settings_custom_model_hint">Model name</string>
-    <string name="settings_system_prompt_hint">System prompt (optional) — describe the agent\'s persona and instructions</string>
-    <string name="btn_test">Test</string>
-    <string name="btn_save">Save Settings</string>
-
-    <!-- ChatActivity -->
-    <string name="chat_title">Chat</string>
-    <string name="chat_input_hint">Type a message…</string>
+    <!-- ── ChatActivity ─────────────────────────────────────────────────────── -->
+    <string name="hint_message">Message…</string>
     <string name="btn_send">Send</string>
 
-    <!-- BridgeSetupActivity -->
+    <!-- ── SettingsActivity ─────────────────────────────────────────────────── -->
+    <string name="settings_title">Settings</string>
+    <string name="hint_api_key">API Key</string>
+    <string name="hint_model_name">Model name</string>
+    <string name="hint_base_url">Base URL</string>
+    <string name="hint_system_prompt">System prompt (optional) — shapes the agent\'s personality and behaviour</string>
+    <string name="label_active_provider">Active provider</string>
+    <string name="btn_save_settings">Save</string>
+
+    <!-- ── BridgeSetupActivity — general ────────────────────────────────────── -->
     <string name="bridge_setup_title">Bridge Setup</string>
-    <string name="bridge_setup_subtitle">Follow these steps to connect SDG Claw to the Termux WebSocket bridge. Open Termux and run the commands shown below.</string>
-    <string name="bridge_setup_retry">Retry Connection</string>
-    <string name="bridge_setup_commands_header">Run in Termux</string>
+    <!-- %1$d = current step (1-based), %2$d = total steps -->
+    <string name="step_indicator">Step %1$d / %2$d</string>
 
-    <!-- Bridge setup step rows -->
-    <string name="step_nodejs_title">Node.js installed</string>
-    <string name="step_nodejs_desc">Install Node.js via Termux: pkg install nodejs</string>
-    <string name="step_ws_title">ws package installed</string>
-    <string name="step_ws_desc">Install the ws library inside your bridge directory</string>
-    <string name="step_server_title">Bridge server running</string>
-    <string name="step_server_desc">Start server.js in Termux so it listens on port 8765</string>
-    <string name="step_ws_connected_title">WebSocket connected</string>
-    <string name="step_ws_connected_desc">App has established a live WebSocket connection to the bridge</string>
+    <!-- Navigation buttons -->
+    <string name="btn_back">Back</string>
+    <string name="btn_next">Next</string>
+    <string name="btn_finish">Finish</string>
+    <string name="btn_cancel">Cancel</string>
+    <string name="btn_verify">Verify Connection</string>
+    <string name="btn_copy_code">Copy command</string>
+    <string name="btn_copy_script">Copy setup.sh to storage</string>
+    <string name="btn_overwrite_script">Overwrite existing setup.sh</string>
+    <string name="copying">Copying…</string>
+    <string name="copied_to_clipboard">Copied to clipboard</string>
 
-    <!-- Bridge setup terminal commands -->
-    <string name="bridge_cmd_1">pkg install nodejs</string>
-    <string name="bridge_cmd_2">mkdir -p ~/sdgclaw-bridge &amp;&amp; cd ~/sdgclaw-bridge</string>
-    <string name="bridge_cmd_3">npm init -y &amp;&amp; npm install ws</string>
-    <string name="bridge_cmd_4">node ~/sdgclaw-bridge/server.js</string>
+    <!-- ── BridgeSetupActivity — step 0: Welcome ─────────────────────────────── -->
+    <string name="step0_title">Welcome</string>
+    <string name="step0_description">This wizard will help you set up the SDG Claw Termux bridge — a small Node.js server that runs inside Termux and lets the AI agent execute commands on your device.\n\nYou will need:\n• Termux (from F-Droid)\n• An internet connection for downloading packages\n\nThe setup takes about 5 minutes.</string>
 
-    <!-- Badge labels -->
-    <string name="badge_pending">PENDING</string>
-    <string name="badge_done">DONE</string>
-    <string name="badge_error">ERROR</string>
+    <!-- ── BridgeSetupActivity — step 1: Install Termux ─────────────────────── -->
+    <string name="step1_title">Install Termux</string>
+    <string name="step1_description">Termux is a terminal emulator and Linux environment for Android.\n\n1. Open F-Droid on your device (install it from f-droid.org if needed).\n2. Search for "Termux" and install the official package.\n\nDo NOT install Termux from the Google Play Store — that version is outdated and will cause errors.\n\nOnce installed, open Termux and let it finish its initial setup, then tap Next.</string>
 
-    <!-- Accessibility -->
-    <string name="back">Back</string>
-    <string name="step_status">Step status</string>
+    <!-- ── BridgeSetupActivity — step 2: Install Node.js ─────────────────────── -->
+    <string name="step2_title">Install Node.js</string>
+    <string name="step2_description">Inside Termux, run the commands below to update packages and install Node.js (≥ 16).\n\nCopy each line and paste it into the Termux terminal, then press Enter and wait for it to finish before moving to the next line.</string>
+    <string name="step2_code">pkg update -y\npkg install -y nodejs</string>
+
+    <!-- ── BridgeSetupActivity — step 3: Copy setup.sh ───────────────────────── -->
+    <string name="step3_title">Copy Setup Script</string>
+    <string name="step3_description">Tap the button below to copy the SDG Claw bridge setup script (setup.sh) from this app to your device\'s shared storage.\n\nAfter copying, the file path will be shown here and copied to your clipboard automatically so you can paste it into Termux.</string>
+    <!-- Shown after a successful copy; %1$s = absolute file path -->
+    <string name="step3_description_with_path">setup.sh has been saved to:\n\n%1$s\n\nThe path has been copied to your clipboard. In Termux, run:\n  bash &lt;paste path here&gt;\n\nThen tap Next.</string>
+
+    <!-- ── BridgeSetupActivity — step 4: Run setup.sh ────────────────────────── -->
+    <string name="step4_title">Run the Setup Script</string>
+    <string name="step4_description">In Termux, run the setup script you copied in the previous step.\n\nReplace &lt;path&gt; with the path shown on the previous screen (it\'s in your clipboard).\n\nThe script will:\n  • Create ~/sdgclaw-bridge/\n  • Write server.js\n  • Install the ws npm package\n  • Start the bridge server automatically\n\nLeave Termux open and running in the background, then tap Next.</string>
+    <string name="step4_code">bash &lt;path-to-setup.sh&gt;</string>
+
+    <!-- ── BridgeSetupActivity — step 5: Verify ──────────────────────────────── -->
+    <string name="step5_title">Verify Connection</string>
+    <string name="step5_description">Make sure the bridge server is running in Termux (you should see "Listening on ws://127.0.0.1:8765" in the terminal).\n\nTap "Verify Connection" below to test that SDG Claw can reach the bridge.</string>
+    <string name="verifying">Verifying connection…</string>
+    <string name="verify_success">✓ Connected to bridge successfully!</string>
+    <string name="verify_failure">✗ Could not connect. Make sure the bridge is running in Termux and try again.</string>
+    <string name="verify_icon_desc">Connection status icon</string>
+
+    <!-- ── AssetCopier / file-copy feedback ──────────────────────────────────── -->
+    <!-- %1$s = full file path -->
+    <string name="script_copy_success">setup.sh saved to %1$s</string>
+    <!-- %1$s = error message -->
+    <string name="script_copy_failed">Copy failed: %1$s</string>
+    <!-- %1$s = existing file path -->
+    <string name="script_already_exists">setup.sh already exists at %1$s. Tap again to overwrite.</string>
+    <string name="script_copied">✓ Copied!</string>
+
 </resources>

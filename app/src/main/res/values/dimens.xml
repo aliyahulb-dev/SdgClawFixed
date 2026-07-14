@@ -1,0 +1,8 @@
+<?xml version="1.0" encoding="utf-8"?>
+<resources>
+
+    <!-- Step-indicator dot size and spacing -->
+    <dimen name="dot_size">10dp</dimen>
+    <dimen name="dot_margin">5dp</dimen>
+
+</resources>

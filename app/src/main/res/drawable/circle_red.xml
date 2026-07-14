@@ -1,9 +1,7 @@
 <?xml version="1.0" encoding="utf-8"?>
-<!--
-  Small filled red circle used as a "disconnected" status indicator dot
-  in MainActivity and SettingsActivity.
--->
+<!-- Red status indicator used for "disconnected / error" state -->
 <shape xmlns:android="http://schemas.android.com/apk/res/android"
     android:shape="oval">
-    <solid android:color="@color/status_disconnected" />
+    <solid android:color="@color/red_status" />
+    <size android:width="16dp" android:height="16dp" />
 </shape>
