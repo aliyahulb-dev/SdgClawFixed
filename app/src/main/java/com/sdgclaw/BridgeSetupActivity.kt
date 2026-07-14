@@ -3,7 +3,11 @@ package com.sdgclaw
 import android.content.ClipData
 import android.content.ClipboardManager
 import android.content.Context
+import android.content.Intent
+import android.net.Uri
 import android.os.Bundle
+import android.os.Handler
+import android.os.Looper
 import android.util.Log
 import android.view.View
 import android.widget.Button
@@ -15,64 +19,132 @@ import android.widget.Toast
 import androidx.appcompat.app.AppCompatActivity
 import androidx.core.content.ContextCompat
 import androidx.lifecycle.lifecycleScope
-import com.sdgclaw.util.AssetCopier
+import com.sdgclaw.bridge.TermuxBridge
 import kotlinx.coroutines.Dispatchers
+import kotlinx.coroutines.Job
+import kotlinx.coroutines.delay
+import kotlinx.coroutines.isActive
 import kotlinx.coroutines.launch
 import kotlinx.coroutines.withContext
 import java.io.File
+import java.io.FileOutputStream
 
 /**
- * Step-by-step guided wizard that walks the user through installing the
- * Termux WebSocket bridge.
+ * BridgeSetupActivity — Step-by-step guided setup wizard for the Termux WebSocket bridge.
  *
  * Steps:
- *   0 — Welcome / prerequisites
- *   1 — Install Termux (from F-Droid)
- *   2 — Install Node.js inside Termux
- *   3 — Copy setup.sh to device storage
- *   4 — Run setup.sh in Termux
- *   5 — Verify connection (final step)
+ *  0  Install Termux (from F-Droid)
+ *  1  Install Node.js in Termux
+ *  2  Copy setup.sh asset to device storage (auto-performed on arrival)
+ *  3  Launch Termux and run setup.sh via deep-link; 2 s polling loop verifies file copied
+ *  4  Start the bridge server; 2 s polling loop verifies WebSocket connection
+ *
+ * Polling state machine:
+ *  - IDLE        → not polling
+ *  - POLLING     → coroutine running, checking every POLL_INTERVAL_MS
+ *  - DONE        → condition met, polling stopped
+ *  - TIMED_OUT   → POLL_TIMEOUT_MS elapsed without condition, polling stopped
+ *
+ * Deep-link:
+ *  Intent(Intent.ACTION_VIEW, Uri.parse("termux://run-script")) fires on step 3 to
+ *  open Termux; on step 4 the user starts the server manually (or we deep-link again).
  */
 class BridgeSetupActivity : AppCompatActivity() {
 
     // ── Constants ─────────────────────────────────────────────────────────────
     companion object {
         private const val TAG = "BridgeSetupActivity"
-        private const val ASSET_SETUP_SH = "setup.sh"
-        private const val TOTAL_STEPS = 6          // steps 0 … 5
+
+        /** Bridge script destination on internal app storage (scoped, no permission needed). */
+        private const val SCRIPT_DIR_NAME  = "sdgclaw-setup"
+        private const val SCRIPT_FILE_NAME = "setup.sh"
+
+        /** Polling configuration. */
+        private const val POLL_INTERVAL_MS = 2_000L
+        private const val POLL_TIMEOUT_MS  = 120_000L  // 2 minutes
+
+        /** Total wizard steps (0-indexed internally, 1-indexed in UI). */
+        private const val TOTAL_STEPS = 5
     }
 
-    // ── State ─────────────────────────────────────────────────────────────────
-    private var currentStep = 0
+    // ── Polling state ─────────────────────────────────────────────────────────
+    private enum class PollState { IDLE, POLLING, DONE, TIMED_OUT }
 
-    /** Step data class — drives the wizard UI. */
+    // ── Step data ─────────────────────────────────────────────────────────────
     private data class SetupStep(
         val title: String,
         val description: String,
-        /** Shell / CLI snippet shown in the code block; null = no code block. */
         val codeSnippet: String? = null,
-        /** Whether to show the "Copy setup.sh" action button on this step. */
-        val showCopyScriptButton: Boolean = false,
-        /** Whether the Next button should read "Verify Connection" instead. */
-        val isVerifyStep: Boolean = false,
+        val isScriptCopyStep: Boolean = false,
+        val isDeepLinkStep: Boolean = false,
+        val isFinalStep: Boolean = false,
+        val pollCondition: (suspend () -> Boolean)? = null
     )
 
-    private val steps: List<SetupStep> by lazy { buildSteps() }
-
-    // ── Views (resolved lazily to avoid boilerplate) ──────────────────────────
-    private lateinit var tvStepIndicator: TextView
+    // ── UI references (inflated lazily from setContentView) ───────────────────
+    private lateinit var tvStepCounter: TextView
     private lateinit var tvStepTitle: TextView
     private lateinit var tvStepDescription: TextView
-    private lateinit var cardCodeBlock: View
     private lateinit var tvCodeSnippet: TextView
+    private lateinit var cardCodeSnippet: View
     private lateinit var btnCopyCode: Button
-    private lateinit var btnCopyScript: Button
     private lateinit var btnBack: Button
     private lateinit var btnNext: Button
-    private lateinit var verifyContainer: LinearLayout
-    private lateinit var tvVerifyStatus: TextView
-    private lateinit var ivVerifyIcon: ImageView
-    private lateinit var dotContainer: LinearLayout
+    private lateinit var tvScriptPath: TextView
+    private lateinit var cardScriptPath: View
+    private lateinit var tvPollStatus: TextView
+    private lateinit var tvConnectionStatus: TextView
+    private lateinit var ivConnectionIcon: ImageView
+    private lateinit var cardConnectionStatus: View
+    private lateinit var stepIndicatorContainer: LinearLayout
+
+    // ── State ─────────────────────────────────────────────────────────────────
+    private var currentStep = 0
+    private var scriptDestFile: File? = null
+    private var pollJob: Job? = null
+    private var pollState = PollState.IDLE
+    /** Tracks which steps have been confirmed/checked off. */
+    private val completedSteps = mutableSetOf<Int>()
+
+    // ── Bridge reference ──────────────────────────────────────────────────────
+    private val bridge: TermuxBridge? get() =
+        (application as? SDGClawApplication)?.bridge
+
+    // ── Steps definition ──────────────────────────────────────────────────────
+    private val steps: List<SetupStep> by lazy {
+        listOf(
+            /* 0 */ SetupStep(
+                title       = getString(R.string.setup_step1_title),
+                description = getString(R.string.setup_step1_desc),
+                codeSnippet = null
+            ),
+            /* 1 */ SetupStep(
+                title       = getString(R.string.setup_step2_title),
+                description = getString(R.string.setup_step2_desc),
+                codeSnippet = getString(R.string.setup_step2_code)
+            ),
+            /* 2 */ SetupStep(
+                title            = getString(R.string.setup_step3_title),
+                description      = getString(R.string.setup_step3_desc),
+                isScriptCopyStep = true
+            ),
+            /* 3 */ SetupStep(
+                title         = getString(R.string.setup_step4_title),
+                description   = getString(R.string.setup_step4_desc),
+                codeSnippet   = getString(R.string.setup_step4_code),
+                isDeepLinkStep = true,
+                pollCondition  = { isScriptDeployed() }
+            ),
+            /* 4 */ SetupStep(
+                title         = getString(R.string.setup_step5_title),
+                description   = getString(R.string.setup_step5_desc),
+                codeSnippet   = getString(R.string.setup_step5_code),
+                isDeepLinkStep = true,
+                isFinalStep   = true,
+                pollCondition  = { bridge?.isConnected() == true }
+            )
+        )
+    }
 
     // ── Lifecycle ─────────────────────────────────────────────────────────────
 
@@ -81,58 +153,69 @@ class BridgeSetupActivity : AppCompatActivity() {
         setContentView(R.layout.activity_bridge_setup)
 
         bindViews()
-        buildDots()
-        renderStep(currentStep)
+        buildStepIndicator()
+        updateStep(0)
     }
 
-    // ── View binding ──────────────────────────────────────────────────────────
+    override fun onDestroy() {
+        super.onDestroy()
+        stopPolling()
+    }
+
+    // ── View binding (manual — no ViewBinding plugin required) ────────────────
 
     private fun bindViews() {
-        tvStepIndicator  = findViewById(R.id.tv_step_indicator)
-        tvStepTitle      = findViewById(R.id.tv_step_title)
-        tvStepDescription = findViewById(R.id.tv_step_description)
-        cardCodeBlock    = findViewById(R.id.card_code_block)
-        tvCodeSnippet    = findViewById(R.id.tv_code_snippet)
-        btnCopyCode      = findViewById(R.id.btn_copy_code)
-        btnCopyScript    = findViewById(R.id.btn_copy_script)
-        btnBack          = findViewById(R.id.btn_back)
-        btnNext          = findViewById(R.id.btn_next)
-        verifyContainer  = findViewById(R.id.verify_container)
-        tvVerifyStatus   = findViewById(R.id.tv_verify_status)
-        ivVerifyIcon     = findViewById(R.id.iv_verify_icon)
-        dotContainer     = findViewById(R.id.dot_container)
+        tvStepCounter          = findViewById(R.id.tv_step_counter)
+        tvStepTitle            = findViewById(R.id.tv_step_title)
+        tvStepDescription      = findViewById(R.id.tv_step_description)
+        tvCodeSnippet          = findViewById(R.id.tv_code_snippet)
+        cardCodeSnippet        = findViewById(R.id.card_code_snippet)
+        btnCopyCode            = findViewById(R.id.btn_copy_code)
+        btnBack                = findViewById(R.id.btn_back)
+        btnNext                = findViewById(R.id.btn_next)
+        tvScriptPath           = findViewById(R.id.tv_script_path)
+        cardScriptPath         = findViewById(R.id.card_script_path)
+        tvPollStatus           = findViewById(R.id.tv_poll_status)
+        tvConnectionStatus     = findViewById(R.id.tv_connection_status)
+        ivConnectionIcon       = findViewById(R.id.iv_connection_icon)
+        cardConnectionStatus   = findViewById(R.id.card_connection_status)
+        stepIndicatorContainer = findViewById(R.id.step_indicator_container)
 
         btnBack.setOnClickListener { navigateBack() }
         btnNext.setOnClickListener { navigateNext() }
         btnCopyCode.setOnClickListener { copyCodeToClipboard() }
-        btnCopyScript.setOnClickListener { copySetupScriptToStorage() }
     }
 
-    // ── Dot indicator ─────────────────────────────────────────────────────────
+    // ── Step indicator dots ────────────────────────────────────────────────────
 
-    private fun buildDots() {
-        dotContainer.removeAllViews()
-        val size = resources.getDimensionPixelSize(R.dimen.dot_size)
-        val margin = resources.getDimensionPixelSize(R.dimen.dot_margin)
-        repeat(TOTAL_STEPS) { i ->
+    private fun buildStepIndicator() {
+        stepIndicatorContainer.removeAllViews()
+        val sizePx  = (10 * resources.displayMetrics.density).toInt()
+        val gapPx   = (8  * resources.displayMetrics.density).toInt()
+        repeat(TOTAL_STEPS) { index ->
             val dot = View(this).apply {
-                val lp = LinearLayout.LayoutParams(size, size).also {
-                    it.setMargins(margin, 0, margin, 0)
+                layoutParams = LinearLayout.LayoutParams(sizePx, sizePx).also {
+                    if (index > 0) it.leftMargin = gapPx
                 }
-                layoutParams = lp
                 setBackgroundResource(
-                    if (i == currentStep) R.drawable.dot_active else R.drawable.dot_inactive
+                    if (index == currentStep) R.drawable.circle_green
+                    else                      R.drawable.circle_gray
                 )
-                tag = i
+                tag = "dot_$index"
             }
-            dotContainer.addView(dot)
+            stepIndicatorContainer.addView(dot)
         }
     }
 
-    private fun refreshDots() {
-        for (i in 0 until dotContainer.childCount) {
-            dotContainer.getChildAt(i)?.setBackgroundResource(
-                if (i == currentStep) R.drawable.dot_active else R.drawable.dot_inactive
+    private fun refreshStepIndicator() {
+        for (i in 0 until TOTAL_STEPS) {
+            val dot = stepIndicatorContainer.findViewWithTag<View>("dot_$i") ?: continue
+            dot.setBackgroundResource(
+                when {
+                    i == currentStep         -> R.drawable.circle_green
+                    i in completedSteps      -> R.drawable.circle_green
+                    else                     -> R.drawable.circle_gray
+                }
             )
         }
     }
@@ -140,301 +223,296 @@ class BridgeSetupActivity : AppCompatActivity() {
     // ── Navigation ────────────────────────────────────────────────────────────
 
     private fun navigateBack() {
-        if (currentStep > 0) {
-            currentStep--
-            renderStep(currentStep)
-        } else {
-            finish()
-        }
+        stopPolling()
+        if (currentStep > 0) updateStep(currentStep - 1) else finish()
     }
 
     private fun navigateNext() {
-        if (steps[currentStep].isVerifyStep) {
-            runConnectionVerification()
-            return
-        }
-        if (currentStep < TOTAL_STEPS - 1) {
-            currentStep++
-            renderStep(currentStep)
-        } else {
-            finish()
+        val step = steps[currentStep]
+        when {
+            step.isFinalStep && pollState == PollState.DONE -> {
+                // All done — return to MainActivity signalling success
+                setResult(RESULT_OK)
+                finish()
+            }
+            step.isFinalStep -> {
+                // Final step but not connected yet — trigger verify
+                startPolling(currentStep)
+            }
+            else -> {
+                completedSteps.add(currentStep)
+                updateStep(currentStep + 1)
+            }
         }
     }
 
-    // ── Render ────────────────────────────────────────────────────────────────
+    // ── Step rendering ────────────────────────────────────────────────────────
 
-    private fun renderStep(index: Int) {
+    private fun updateStep(index: Int) {
+        stopPolling()
+        currentStep = index
         val step = steps[index]
 
-        tvStepIndicator.text  = getString(R.string.step_indicator, index + 1, TOTAL_STEPS)
-        tvStepTitle.text      = step.title
+        // Counter
+        tvStepCounter.text = getString(R.string.setup_step_counter, index + 1, TOTAL_STEPS)
+
+        // Title & description
+        tvStepTitle.text       = step.title
         tvStepDescription.text = step.description
 
-        // Code block
+        // Code snippet card
         if (step.codeSnippet != null) {
-            cardCodeBlock.visibility = View.VISIBLE
-            tvCodeSnippet.text = step.codeSnippet
+            cardCodeSnippet.visibility = View.VISIBLE
+            tvCodeSnippet.text         = step.codeSnippet
         } else {
-            cardCodeBlock.visibility = View.GONE
+            cardCodeSnippet.visibility = View.GONE
         }
 
-        // Copy-script action button
-        btnCopyScript.visibility =
-            if (step.showCopyScriptButton) View.VISIBLE else View.GONE
+        // Script path card (shown after copy on step 2)
+        cardScriptPath.visibility = View.GONE
 
-        // Verify container (only on the last step)
-        verifyContainer.visibility =
-            if (step.isVerifyStep) View.VISIBLE else View.GONE
-        if (!step.isVerifyStep) resetVerifyUi()
+        // Poll status
+        tvPollStatus.visibility = View.GONE
+        tvPollStatus.text       = ""
 
-        // Next button label
+        // Connection status card (only on final step)
+        cardConnectionStatus.visibility = if (step.isFinalStep) View.VISIBLE else View.GONE
+        if (step.isFinalStep) resetConnectionStatus()
+
+        // Navigation buttons
+        btnBack.text = if (index == 0) getString(R.string.setup_btn_cancel) else getString(R.string.setup_btn_back)
         btnNext.text = when {
-            step.isVerifyStep && currentStep == TOTAL_STEPS - 1 ->
-                getString(R.string.btn_finish)
-            step.isVerifyStep ->
-                getString(R.string.btn_verify)
-            currentStep == TOTAL_STEPS - 1 ->
-                getString(R.string.btn_finish)
-            else ->
-                getString(R.string.btn_next)
+            step.isFinalStep  -> getString(R.string.setup_btn_verify)
+            index == TOTAL_STEPS - 1 -> getString(R.string.setup_btn_finish)
+            else              -> getString(R.string.setup_btn_next)
         }
 
-        // Back button label
-        btnBack.text =
-            if (index == 0) getString(R.string.btn_cancel) else getString(R.string.btn_back)
+        // Auto-actions on arrive
+        when {
+            step.isScriptCopyStep -> performScriptCopy()
+            step.isDeepLinkStep   -> {
+                // Auto-trigger deep link when step 3 is the run-script step
+                if (index == 3) fireTermuxDeepLink()
+                if (step.pollCondition != null) startPolling(index)
+            }
+        }
 
-        refreshDots()
+        refreshStepIndicator()
     }
 
-    // ── Copy code snippet to clipboard ────────────────────────────────────────
+    // ── Script copy ───────────────────────────────────────────────────────────
+
+    private fun performScriptCopy() {
+        lifecycleScope.launch {
+            val result = withContext(Dispatchers.IO) { copySetupScript() }
+            if (result != null) {
+                scriptDestFile = result
+                cardScriptPath.visibility = View.VISIBLE
+                tvScriptPath.text = result.absolutePath
+                completedSteps.add(currentStep)
+                refreshStepIndicator()
+                tvPollStatus.visibility = View.VISIBLE
+                tvPollStatus.text       = getString(R.string.setup_script_copied)
+            } else {
+                tvPollStatus.visibility = View.VISIBLE
+                tvPollStatus.text       = getString(R.string.setup_script_copy_failed)
+            }
+        }
+    }
+
+    /**
+     * Copies `assets/setup.sh` to the app's internal files directory under
+     * `sdgclaw-setup/setup.sh`.  No external-storage permission needed.
+     * Returns the destination [File] on success, null on failure.
+     */
+    private fun copySetupScript(): File? {
+        return try {
+            val dir  = File(filesDir, SCRIPT_DIR_NAME).also { it.mkdirs() }
+            val dest = File(dir, SCRIPT_FILE_NAME)
+            assets.open(SCRIPT_FILE_NAME).use { input ->
+                FileOutputStream(dest).use { output ->
+                    val buf = ByteArray(8192)
+                    var n: Int
+                    while (input.read(buf).also { n = it } != -1) output.write(buf, 0, n)
+                }
+            }
+            Log.d(TAG, "setup.sh copied to ${dest.absolutePath}")
+            dest
+        } catch (e: Exception) {
+            Log.e(TAG, "Failed to copy setup.sh", e)
+            null
+        }
+    }
+
+    // ── Termux deep-link ──────────────────────────────────────────────────────
+
+    /**
+     * Fires `termux://run-script` deep-link to open Termux.
+     * Falls back to opening Termux via package name if the URI scheme is not handled.
+     *
+     * The Termux:API `termux://run-script` URI can carry the script path as a query
+     * parameter; however, since Termux's built-in URI handler varies by version we
+     * just open Termux and let the user run the displayed command.
+     */
+    private fun fireTermuxDeepLink() {
+        val scriptPath = scriptDestFile?.absolutePath
+            ?: File(File(filesDir, SCRIPT_DIR_NAME), SCRIPT_FILE_NAME).absolutePath
+
+        // Build URI — Termux handles `termux://run-script?path=...` on some versions
+        val uri = Uri.parse("termux://run-script").buildUpon()
+            .appendQueryParameter("path", scriptPath)
+            .build()
+
+        val intent = Intent(Intent.ACTION_VIEW, uri).apply {
+            addFlags(Intent.FLAG_ACTIVITY_NEW_TASK)
+        }
+
+        if (intent.resolveActivity(packageManager) != null) {
+            Log.d(TAG, "Firing Termux deep-link: $uri")
+            startActivity(intent)
+        } else {
+            // Fallback: open Termux app directly
+            Log.d(TAG, "Deep-link unresolved — falling back to package launch")
+            val fallback = packageManager.getLaunchIntentForPackage("com.termux")
+            if (fallback != null) {
+                fallback.addFlags(Intent.FLAG_ACTIVITY_NEW_TASK)
+                startActivity(fallback)
+            } else {
+                Toast.makeText(this, getString(R.string.setup_termux_not_installed), Toast.LENGTH_LONG).show()
+            }
+        }
+    }
+
+    // ── Polling state machine ─────────────────────────────────────────────────
+
+    /**
+     * Starts a coroutine that evaluates [steps[stepIndex].pollCondition] every
+     * [POLL_INTERVAL_MS] ms.  Stops automatically after [POLL_TIMEOUT_MS] ms or
+     * when the condition returns `true`.
+     *
+     * State transitions:
+     *   IDLE → POLLING → DONE      (condition satisfied)
+     *              └──→ TIMED_OUT  (timeout elapsed)
+     */
+    private fun startPolling(stepIndex: Int) {
+        val condition = steps[stepIndex].pollCondition ?: return
+        if (pollState == PollState.POLLING) return   // already running
+
+        pollState = PollState.POLLING
+        updatePollStatusUi()
+
+        val isFinal = steps[stepIndex].isFinalStep
+        val startTime = System.currentTimeMillis()
+
+        pollJob = lifecycleScope.launch(Dispatchers.IO) {
+            while (isActive) {
+                val elapsed = System.currentTimeMillis() - startTime
+
+                // Check timeout
+                if (elapsed >= POLL_TIMEOUT_MS) {
+                    withContext(Dispatchers.Main) {
+                        pollState = PollState.TIMED_OUT
+                        updatePollStatusUi()
+                        if (isFinal) updateConnectionStatusUi(connected = false, timedOut = true)
+                        Log.w(TAG, "Polling timed out for step $stepIndex after ${elapsed}ms")
+                    }
+                    break
+                }
+
+                // Evaluate condition
+                val satisfied = try { condition() } catch (e: Exception) {
+                    Log.e(TAG, "Poll condition threw", e)
+                    false
+                }
+
+                if (satisfied) {
+                    withContext(Dispatchers.Main) {
+                        pollState = PollState.DONE
+                        completedSteps.add(stepIndex)
+                        refreshStepIndicator()
+                        updatePollStatusUi()
+                        if (isFinal) updateConnectionStatusUi(connected = true, timedOut = false)
+
+                        // Auto-advance Next button label
+                        btnNext.text = if (isFinal)
+                            getString(R.string.setup_btn_finish)
+                        else
+                            getString(R.string.setup_btn_next)
+
+                        Log.d(TAG, "Poll condition satisfied for step $stepIndex (${elapsed}ms)")
+                    }
+                    break
+                }
+
+                // Update elapsed UI on main thread
+                withContext(Dispatchers.Main) {
+                    val remaining = ((POLL_TIMEOUT_MS - elapsed) / 1000).coerceAtLeast(0)
+                    tvPollStatus.visibility = View.VISIBLE
+                    tvPollStatus.text = getString(R.string.setup_polling, remaining)
+                }
+
+                delay(POLL_INTERVAL_MS)
+            }
+        }
+    }
+
+    private fun stopPolling() {
+        pollJob?.cancel()
+        pollJob = null
+        if (pollState == PollState.POLLING) pollState = PollState.IDLE
+    }
+
+    // ── UI state helpers ──────────────────────────────────────────────────────
+
+    private fun updatePollStatusUi() {
+        tvPollStatus.visibility = View.VISIBLE
+        tvPollStatus.text = when (pollState) {
+            PollState.IDLE      -> ""
+            PollState.POLLING   -> getString(R.string.setup_polling, POLL_TIMEOUT_MS / 1000)
+            PollState.DONE      -> getString(R.string.setup_poll_done)
+            PollState.TIMED_OUT -> getString(R.string.setup_poll_timeout)
+        }
+    }
+
+    private fun resetConnectionStatus() {
+        ivConnectionIcon.setImageResource(R.drawable.circle_gray)
+        tvConnectionStatus.text = getString(R.string.setup_connection_waiting)
+        cardConnectionStatus.visibility = View.VISIBLE
+    }
+
+    private fun updateConnectionStatusUi(connected: Boolean, timedOut: Boolean) {
+        cardConnectionStatus.visibility = View.VISIBLE
+        if (connected) {
+            ivConnectionIcon.setImageResource(R.drawable.circle_green)
+            tvConnectionStatus.text = getString(R.string.setup_connection_success)
+            tvConnectionStatus.setTextColor(ContextCompat.getColor(this, R.color.green_connected))
+        } else {
+            ivConnectionIcon.setImageResource(R.drawable.circle_red)
+            tvConnectionStatus.text = if (timedOut)
+                getString(R.string.setup_connection_timeout)
+            else
+                getString(R.string.setup_connection_failed)
+            tvConnectionStatus.setTextColor(ContextCompat.getColor(this, R.color.red_error))
+        }
+    }
+
+    // ── Clipboard helper ──────────────────────────────────────────────────────
 
     private fun copyCodeToClipboard() {
-        val text = tvCodeSnippet.text?.toString() ?: return
+        val code = tvCodeSnippet.text?.toString() ?: return
         val cm = getSystemService(Context.CLIPBOARD_SERVICE) as ClipboardManager
-        cm.setPrimaryClip(ClipData.newPlainText("sdgclaw_command", text))
-        Toast.makeText(this, R.string.copied_to_clipboard, Toast.LENGTH_SHORT).show()
+        cm.setPrimaryClip(ClipData.newPlainText("SDG Claw setup command", code))
+        Toast.makeText(this, getString(R.string.setup_copied_to_clipboard), Toast.LENGTH_SHORT).show()
     }
 
-    // ── Copy setup.sh from assets to device storage ───────────────────────────
+    // ── Poll condition helpers ────────────────────────────────────────────────
 
     /**
-     * Copies `assets/setup.sh` to the app's external files directory,
-     * then shows the destination path so the user can `cp` it into Termux.
-     *
-     * Handles:
-     *  - file already exists (offers overwrite via second tap)
-     *  - write failure (surfaces error message)
-     *  - post-copy readability check
+     * Returns true if the setup script has been successfully copied to internal storage.
+     * Used as the poll condition for step 3 (the copy/deploy step).
      */
-    private fun copySetupScriptToStorage() {
-        btnCopyScript.isEnabled = false
-        btnCopyScript.text = getString(R.string.copying)
-
-        lifecycleScope.launch {
-            val destFile = AssetCopier.defaultSetupScriptDest(applicationContext)
-            Log.d(TAG, "Copying setup.sh → ${destFile.absolutePath}")
-
-            val result = withContext(Dispatchers.IO) {
-                AssetCopier.copyAndVerify(
-                    context    = applicationContext,
-                    assetPath  = ASSET_SETUP_SH,
-                    destFile   = destFile,
-                    overwrite  = false,        // first attempt: do not clobber
-                )
-            }
-
-            when (result) {
-                is AssetCopier.CopyResult.Success -> {
-                    if (result.alreadyExisted) {
-                        // File exists — ask user if they want to overwrite
-                        handleScriptAlreadyExists(destFile)
-                    } else {
-                        onScriptCopiedSuccessfully(destFile)
-                    }
-                }
-                is AssetCopier.CopyResult.Failure -> {
-                    onScriptCopyFailed(result.message)
-                }
-            }
-        }
+    private fun isScriptDeployed(): Boolean {
+        val dest = File(File(filesDir, SCRIPT_DIR_NAME), SCRIPT_FILE_NAME)
+        return dest.exists() && dest.length() > 0
     }
-
-    /**
-     * Called when the destination already exists.
-     * Re-enables the button with an "Overwrite" label so the user can decide.
-     */
-    private fun handleScriptAlreadyExists(destFile: File) {
-        val path = destFile.absolutePath
-        Log.d(TAG, "setup.sh already exists at $path")
-
-        // Update button to offer overwrite
-        btnCopyScript.isEnabled = true
-        btnCopyScript.text = getString(R.string.btn_overwrite_script)
-
-        // Replace the click listener with an overwrite action
-        btnCopyScript.setOnClickListener {
-            btnCopyScript.isEnabled = false
-            btnCopyScript.text = getString(R.string.copying)
-
-            lifecycleScope.launch {
-                val destFile2 = AssetCopier.defaultSetupScriptDest(applicationContext)
-                val result = withContext(Dispatchers.IO) {
-                    AssetCopier.copyAndVerify(
-                        context   = applicationContext,
-                        assetPath = ASSET_SETUP_SH,
-                        destFile  = destFile2,
-                        overwrite = true,
-                    )
-                }
-                when (result) {
-                    is AssetCopier.CopyResult.Success -> onScriptCopiedSuccessfully(destFile2)
-                    is AssetCopier.CopyResult.Failure -> onScriptCopyFailed(result.message)
-                }
-            }
-        }
-
-        Toast.makeText(
-            this,
-            getString(R.string.script_already_exists, path),
-            Toast.LENGTH_LONG
-        ).show()
-    }
-
-    private fun onScriptCopiedSuccessfully(destFile: File) {
-        Log.d(TAG, "setup.sh copied OK: ${destFile.absolutePath}")
-        btnCopyScript.isEnabled = true
-        btnCopyScript.text = getString(R.string.script_copied)
-
-        // Update description to include the path
-        tvStepDescription.text = getString(
-            R.string.step3_description_with_path,
-            destFile.absolutePath
-        )
-
-        // Copy path to clipboard for convenience
-        val cm = getSystemService(Context.CLIPBOARD_SERVICE) as ClipboardManager
-        cm.setPrimaryClip(
-            ClipData.newPlainText("setup_sh_path", destFile.absolutePath)
-        )
-
-        Toast.makeText(
-            this,
-            getString(R.string.script_copy_success, destFile.absolutePath),
-            Toast.LENGTH_LONG
-        ).show()
-    }
-
-    private fun onScriptCopyFailed(message: String) {
-        Log.e(TAG, "setup.sh copy failed: $message")
-        btnCopyScript.isEnabled = true
-        btnCopyScript.text = getString(R.string.btn_copy_script)
-        Toast.makeText(
-            this,
-            getString(R.string.script_copy_failed, message),
-            Toast.LENGTH_LONG
-        ).show()
-    }
-
-    // ── Connection verification ───────────────────────────────────────────────
-
-    private fun runConnectionVerification() {
-        btnNext.isEnabled = false
-        tvVerifyStatus.text = getString(R.string.verifying)
-        tvVerifyStatus.setTextColor(ContextCompat.getColor(this, R.color.gray_medium))
-        ivVerifyIcon.setImageResource(R.drawable.circle_yellow)
-        verifyContainer.visibility = View.VISIBLE
-
-        lifecycleScope.launch {
-            val connected = withContext(Dispatchers.IO) {
-                pingBridge()
-            }
-            onVerifyResult(connected)
-        }
-    }
-
-    /**
-     * Attempts a TCP-level connection to the bridge's WebSocket port.
-     * Returns `true` if a socket can be opened within 3 seconds.
-     */
-    private fun pingBridge(): Boolean {
-        return try {
-            val app = application as SDGClawApplication
-            // Re-use the Application's bridge and send a ping;
-            // we rely on the bridge being already connected (auto-connect).
-            val bridge = app.termuxBridge
-            bridge.isConnected()
-        } catch (e: Exception) {
-            Log.e(TAG, "pingBridge exception: ${e.message}", e)
-            false
-        }
-    }
-
-    private fun onVerifyResult(connected: Boolean) {
-        btnNext.isEnabled = true
-        if (connected) {
-            tvVerifyStatus.text = getString(R.string.verify_success)
-            tvVerifyStatus.setTextColor(ContextCompat.getColor(this, R.color.green_status))
-            ivVerifyIcon.setImageResource(R.drawable.circle_green)
-            btnNext.text = getString(R.string.btn_finish)
-            // Swap click so the next tap goes to finish
-            btnNext.setOnClickListener { finish() }
-        } else {
-            tvVerifyStatus.text = getString(R.string.verify_failure)
-            tvVerifyStatus.setTextColor(ContextCompat.getColor(this, R.color.red_status))
-            ivVerifyIcon.setImageResource(R.drawable.circle_red)
-            btnNext.text = getString(R.string.btn_verify)
-        }
-    }
-
-    private fun resetVerifyUi() {
-        tvVerifyStatus.text = ""
-        ivVerifyIcon.setImageDrawable(null)
-    }
-
-    // ── Step data ─────────────────────────────────────────────────────────────
-
-    private fun buildSteps(): List<SetupStep> = listOf(
-
-        /* 0 — Welcome */
-        SetupStep(
-            title = getString(R.string.step0_title),
-            description = getString(R.string.step0_description),
-        ),
-
-        /* 1 — Install Termux */
-        SetupStep(
-            title = getString(R.string.step1_title),
-            description = getString(R.string.step1_description),
-            codeSnippet = null, // user installs from F-Droid; no shell command here
-        ),
-
-        /* 2 — Install Node.js inside Termux */
-        SetupStep(
-            title = getString(R.string.step2_title),
-            description = getString(R.string.step2_description),
-            codeSnippet = getString(R.string.step2_code),
-        ),
-
-        /* 3 — Copy setup.sh to device */
-        SetupStep(
-            title = getString(R.string.step3_title),
-            description = getString(R.string.step3_description),
-            codeSnippet = null,
-            showCopyScriptButton = true,
-        ),
-
-        /* 4 — Run setup.sh in Termux */
-        SetupStep(
-            title = getString(R.string.step4_title),
-            description = getString(R.string.step4_description),
-            codeSnippet = getString(R.string.step4_code),
-        ),
-
-        /* 5 — Verify connection */
-        SetupStep(
-            title = getString(R.string.step5_title),
-            description = getString(R.string.step5_description),
-            isVerifyStep = true,
-        ),
-    )
 }

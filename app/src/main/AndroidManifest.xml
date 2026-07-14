@@ -7,6 +7,22 @@
     <uses-permission android:name="android.permission.FOREGROUND_SERVICE" />
     <uses-permission android:name="android.permission.FOREGROUND_SERVICE_DATA_SYNC" />
 
+    <!--
+      Android 11+ (API 30+) package visibility:
+      We need to query whether Termux is installed and launch it by package name.
+      The <queries> block below declares intent visibility without needing
+      QUERY_ALL_PACKAGES, which requires Play Store declaration.
+    -->
+    <queries>
+        <!-- Termux package launch -->
+        <package android:name="com.termux" />
+        <!-- termux://run-script URI scheme (deep-link) -->
+        <intent>
+            <action android:name="android.intent.action.VIEW" />
+            <data android:scheme="termux" />
+        </intent>
+    </queries>
+
     <application
         android:name=".SDGClawApplication"
         android:allowBackup="true"
