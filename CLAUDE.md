@@ -78,6 +78,12 @@
 |---|---|
 | `setup.sh` | Shell script bundled as an Android asset; automates Termux bridge setup (creates directory, writes `server.js`, runs `npm install ws`, and starts the server); copied to a user-accessible location (e.g., `/sdcard/sdgclaw-setup/`) at runtime and displayed for the user to run in Termux |
 
+### Scripts (repo root)
+
+| File | Role |
+|---|---|
+| `push_changes.sh` (or similar) | Utility shell script added to automate pushing local changes to the Git repository; committed to the `feat/add-git-push-script-rndjb-queued` branch and merged via `main_queued` |
+
 ### Resources (`app/src/main/res/`)
 
 | Path | Role |
@@ -209,6 +215,16 @@ var isCollapsed: Boolean  // backed by instance field; no SharedPreferences pers
 
 ---
 
+## Git Workflow
+
+- **Default integration branch**: `main`
+- **Work branches**: feature branches named `feat/<description>-<id>-queued` (e.g., `feat/add-git-push-script-rndjb-queued`)
+- **Queued merge branch**: `main_queued` — `main` is synced into `main_queued` before feature branches are created from it; feature branches are committed to `main_queued` before final merge
+- **Commit granularity**: one commit per logical file addition or change set
+- **Utility/automation scripts** (e.g., Git push helpers) are committed to the repo root and tracked in version control like any other source file
+
+---
+
 ## Coding Conventions
 
 ### Kotlin Style
@@ -228,7 +244,4 @@ var isCollapsed: Boolean  // backed by instance field; no SharedPreferences pers
 - System prompt is stored in SharedPreferences under a dedicated key and read in `ChatActivity` before constructing `AgentLoop`; it is injected into the conversation history as a `ChatMessage("system", ...)` prepended to every turn
 
 ### Stability Dashboard Pattern (`StabilityDashboardView` + `ChatActivity`)
-- `StabilityDashboardView` is a self-contained custom `View` (subclass of `LinearLayout` or `FrameLayout`) inflated from `layout/view_stability_dashboard.xml`; it owns all drawing logic and state
-- `ChatActivity` maintains a `trajectoryPoints: MutableList<List<Double>>` that accumulates a numeric embedding of each agent step (e.g., token-length vector of the last assistant message + tool results); after each agent step callback (`onAgentResponse`, `onToolResult`) it calls `StabilityDiagnostic.analyze(trajectoryPoints)` on `Dispatchers.Default` and posts the resulting `Report` to the main thread via `withContext(Dispatchers.Main) { dashboard.updateReport(report) }`
-- Sparklines are drawn using `Canvas.drawPolyline` / `Path` inside `StabilityDashboardView.onDraw()`; the view calls `invalidate()` after `updateReport()` to trigger a redraw
-- Regime badge background is swapped by calling `view.background = ContextCompat.get
+- `StabilityDashboardView` is a
