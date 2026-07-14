@@ -1,109 +1,38 @@
 #!/data/data/com.termux/files/usr/bin/bash
-# =============================================================================
+# ─────────────────────────────────────────────────────────────────────────────
 # SDG Claw — Termux Bridge Setup Script
-# =============================================================================
-# This script installs and starts the SDG Claw WebSocket bridge inside Termux.
-# Run it once after copying it into Termux:
+# Bundled as an app asset and copied to internal storage at runtime.
 #
-#   bash ~/sdgclaw-setup.sh
+# What this script does:
+#   1. Creates ~/sdgclaw-bridge/
+#   2. Writes server.js (WebSocket bridge) via heredoc
+#   3. Runs: npm install ws
+#   4. Starts the server (foreground; keep terminal open)
 #
-# After the first run, start the bridge any time with:
-#   node ~/sdgclaw-bridge/server.js
-# =============================================================================
+# Usage (run inside a Termux terminal):
+#   bash /path/to/setup.sh
+# ─────────────────────────────────────────────────────────────────────────────
 
 set -euo pipefail
 
-# ── Colour helpers ────────────────────────────────────────────────────────────
-RED='\033[0;31m'
-GREEN='\033[0;32m'
-YELLOW='\033[1;33m'
-CYAN='\033[0;36m'
-BOLD='\033[1m'
-NC='\033[0m' # No Colour
-
-info()    { echo -e "${CYAN}[INFO]${NC}  $*"; }
-success() { echo -e "${GREEN}[OK]${NC}    $*"; }
-warn()    { echo -e "${YELLOW}[WARN]${NC}  $*"; }
-error()   { echo -e "${RED}[ERROR]${NC} $*" >&2; }
-die()     { error "$*"; exit 1; }
-
-# ── Constants ─────────────────────────────────────────────────────────────────
 BRIDGE_DIR="$HOME/sdgclaw-bridge"
 SERVER_FILE="$BRIDGE_DIR/server.js"
-PKG_FILE="$BRIDGE_DIR/package.json"
-PORT=8765
-MIN_NODE_MAJOR=16
+PACKAGE_FILE="$BRIDGE_DIR/package.json"
 
-# ── Step 1: Check that we are inside Termux ───────────────────────────────────
 echo ""
-echo -e "${BOLD}═══════════════════════════════════════════${NC}"
-echo -e "${BOLD}   SDG Claw — Termux Bridge Installer      ${NC}"
-echo -e "${BOLD}═══════════════════════════════════════════${NC}"
+echo "╔══════════════════════════════════════════╗"
+echo "║       SDG Claw — Bridge Setup            ║"
+echo "╚══════════════════════════════════════════╝"
 echo ""
 
-if [[ ! -d "/data/data/com.termux" ]]; then
-    die "This script must be run inside Termux."
-fi
-success "Running inside Termux."
-
-# ── Step 2: Update package lists ─────────────────────────────────────────────
-info "Updating Termux package lists (this may take a moment)…"
-if ! pkg update -y 2>&1 | tail -5; then
-    warn "pkg update encountered warnings; continuing anyway."
-fi
-
-# ── Step 3: Install Node.js if missing ───────────────────────────────────────
-install_nodejs() {
-    info "Installing Node.js via pkg…"
-    pkg install -y nodejs || die "Failed to install nodejs. Check your internet connection and try again."
-}
-
-if command -v node &>/dev/null; then
-    NODE_VER=$(node --version | sed 's/v//')
-    NODE_MAJOR=$(echo "$NODE_VER" | cut -d. -f1)
-    if (( NODE_MAJOR >= MIN_NODE_MAJOR )); then
-        success "Node.js $NODE_VER is already installed."
-    else
-        warn "Node.js $NODE_VER is too old (need ≥ $MIN_NODE_MAJOR). Upgrading…"
-        install_nodejs
-    fi
-else
-    install_nodejs
-fi
-
-# Verify npm is available
-if ! command -v npm &>/dev/null; then
-    die "npm not found after Node.js install. Run 'pkg install nodejs' manually."
-fi
-success "npm $(npm --version) is available."
-
-# ── Step 4: Create bridge directory ──────────────────────────────────────────
-info "Creating bridge directory at $BRIDGE_DIR…"
+# ── Step 1: Create bridge directory ──────────────────────────────────────────
+echo "[1/4] Creating bridge directory at $BRIDGE_DIR …"
 mkdir -p "$BRIDGE_DIR"
-success "Directory ready: $BRIDGE_DIR"
+echo "      Done."
 
-# ── Step 5: Write package.json ────────────────────────────────────────────────
-info "Writing package.json…"
-cat > "$PKG_FILE" << 'PKGJSON'
-{
-  "name": "sdgclaw-bridge",
-  "version": "1.0.0",
-  "description": "SDG Claw Termux WebSocket bridge",
-  "main": "server.js",
-  "scripts": {
-    "start": "node server.js"
-  },
-  "dependencies": {
-    "ws": "^8.16.0"
-  },
-  "license": "MIT"
-}
-PKGJSON
-success "package.json written."
-
-# ── Step 6: Write server.js ───────────────────────────────────────────────────
-info "Writing server.js…"
-cat > "$SERVER_FILE" << 'SERVERJS'
+# ── Step 2: Write server.js ───────────────────────────────────────────────────
+echo "[2/4] Writing server.js …"
+cat > "$SERVER_FILE" << 'SERVERJS_EOF'
 /**
  * SDG Claw — Termux WebSocket Bridge  (server.js)
  *
@@ -111,15 +40,19 @@ cat > "$SERVER_FILE" << 'SERVERJS'
  * Receives JSON tool-execution requests from the Android app and returns results.
  *
  * Message format (App → Bridge):
- *   { "type": "execute_command"|"read_file"|"write_file"|"list_dir"|"ping",
- *     "id": "<request-id>",
- *     "payload": { ... } }
+ *   {
+ *     "type": "execute_command" | "read_file" | "write_file" | "list_dir" | "ping",
+ *     "id": "<uuid>",
+ *     "payload": { ... }
+ *   }
  *
  * Message format (Bridge → App):
- *   { "type": "result"|"error"|"pong",
- *     "id": "<request-id>",
- *     "output": "...",
- *     "error": "..." }
+ *   {
+ *     "type": "result" | "error" | "pong",
+ *     "id": "<uuid>",
+ *     "output": "...",   // present on "result"
+ *     "error": "..."     // present on "error"
+ *   }
  */
 
 'use strict';
@@ -131,52 +64,33 @@ const path                 = require('path');
 
 const PORT    = 8765;
 const HOST    = '127.0.0.1';
-const TIMEOUT = 30_000; // ms — max time allowed per command
-
-// ── Helpers ──────────────────────────────────────────────────────────────────
+const TIMEOUT = 30_000;
 
 function send(ws, obj) {
-    if (ws.readyState === ws.OPEN) {
-        ws.send(JSON.stringify(obj));
-    }
+    if (ws.readyState === ws.OPEN) ws.send(JSON.stringify(obj));
 }
 
 function reply(ws, id, output, errorMsg) {
     const msg = { id };
-    if (errorMsg) {
-        msg.type  = 'error';
-        msg.error = errorMsg;
-    } else {
-        msg.type   = 'result';
-        msg.output = output ?? '';
-    }
+    if (errorMsg) { msg.type = 'error';  msg.error  = errorMsg;    }
+    else          { msg.type = 'result'; msg.output = output ?? ''; }
     send(ws, msg);
 }
 
-// ── Handlers ─────────────────────────────────────────────────────────────────
-
 function handleExecuteCommand(ws, id, payload) {
     const cmd = payload.command;
-    if (!cmd || typeof cmd !== 'string') {
+    if (!cmd || typeof cmd !== 'string')
         return reply(ws, id, null, 'Missing or invalid "command" in payload');
-    }
 
-    let stdout = '';
-    let stderr = '';
-    let done   = false;
-
-    // Run the command through bash so pipes, redirects, etc. work.
-    const child = spawn('/data/data/com.termux/files/usr/bin/bash', ['-c', cmd], {
-        env: { ...process.env },
-        timeout: TIMEOUT,
-    });
+    let stdout = '', stderr = '', done = false;
+    const child = spawn('/data/data/com.termux/files/usr/bin/bash', ['-c', cmd],
+                        { env: { ...process.env } });
 
     const timer = setTimeout(() => {
-        if (!done) {
-            child.kill('SIGKILL');
-            reply(ws, id, stdout || null, `Command timed out after ${TIMEOUT / 1000}s`);
-            done = true;
-        }
+        if (done) return;
+        done = true;
+        child.kill('SIGKILL');
+        reply(ws, id, stdout || null, `Command timed out after ${TIMEOUT / 1000}s`);
     }, TIMEOUT);
 
     child.stdout.on('data', d => { stdout += d.toString(); });
@@ -187,11 +101,9 @@ function handleExecuteCommand(ws, id, payload) {
         done = true;
         clearTimeout(timer);
         const output = stdout + (stderr ? `\n[stderr]\n${stderr}` : '');
-        if (code === 0) {
-            reply(ws, id, output);
-        } else {
-            reply(ws, id, output, `Process exited with code ${code}${stderr ? ': ' + stderr.trim() : ''}`);
-        }
+        if (code === 0) reply(ws, id, output);
+        else reply(ws, id, output,
+            `Process exited with code ${code}${stderr ? ': ' + stderr.trim() : ''}`);
     });
 
     child.on('error', err => {
@@ -238,12 +150,11 @@ function handleListDir(ws, id, payload) {
     }
 }
 
-// ── WebSocket server ──────────────────────────────────────────────────────────
-
 const wss = new WebSocketServer({ host: HOST, port: PORT });
 
 wss.on('listening', () => {
     console.log(`[SDG Claw Bridge] Listening on ws://${HOST}:${PORT}`);
+    console.log('[SDG Claw Bridge] Waiting for connections from the Android app…');
 });
 
 wss.on('connection', (ws, req) => {
@@ -251,33 +162,19 @@ wss.on('connection', (ws, req) => {
 
     ws.on('message', raw => {
         let msg;
-        try {
-            msg = JSON.parse(raw.toString());
-        } catch {
-            send(ws, { type: 'error', id: null, error: 'Invalid JSON' });
-            return;
-        }
+        try { msg = JSON.parse(raw.toString()); }
+        catch { send(ws, { type: 'error', id: null, error: 'Invalid JSON' }); return; }
 
         const { type, id, payload = {} } = msg;
+        console.log(`[Bridge] → type="${type}" id="${id}"`);
 
         switch (type) {
-            case 'ping':
-                send(ws, { type: 'pong', id });
-                break;
-            case 'execute_command':
-                handleExecuteCommand(ws, id, payload);
-                break;
-            case 'read_file':
-                handleReadFile(ws, id, payload);
-                break;
-            case 'write_file':
-                handleWriteFile(ws, id, payload);
-                break;
-            case 'list_dir':
-                handleListDir(ws, id, payload);
-                break;
-            default:
-                reply(ws, id, null, `Unknown message type: "${type}"`);
+            case 'ping':            send(ws, { type: 'pong', id }); break;
+            case 'execute_command': handleExecuteCommand(ws, id, payload); break;
+            case 'read_file':       handleReadFile(ws, id, payload); break;
+            case 'write_file':      handleWriteFile(ws, id, payload); break;
+            case 'list_dir':        handleListDir(ws, id, payload); break;
+            default: reply(ws, id, null, `Unknown message type: "${type}"`);
         }
     });
 
@@ -287,47 +184,51 @@ wss.on('connection', (ws, req) => {
 
 wss.on('error', err => {
     console.error(`[Bridge] Server error: ${err.message}`);
+    if (err.code === 'EADDRINUSE')
+        console.error(`[Bridge] Port ${PORT} is already in use. Is the bridge already running?`);
     process.exit(1);
 });
 
-// Graceful shutdown
-process.on('SIGTERM', () => { wss.close(() => process.exit(0)); });
-process.on('SIGINT',  () => { wss.close(() => process.exit(0)); });
-SERVERJS
-success "server.js written."
+function shutdown(signal) {
+    console.log(`\n[Bridge] Received ${signal}. Shutting down…`);
+    wss.close(() => { console.log('[Bridge] Server closed.'); process.exit(0); });
+}
+process.on('SIGTERM', () => shutdown('SIGTERM'));
+process.on('SIGINT',  () => shutdown('SIGINT'));
+SERVERJS_EOF
+echo "      Done."
 
-# ── Step 7: Install npm dependencies ─────────────────────────────────────────
-info "Installing npm dependencies (ws)…"
+# ── Step 3: Write package.json ────────────────────────────────────────────────
+echo "[3/4] Writing package.json …"
+cat > "$PACKAGE_FILE" << 'PACKAGEJSON_EOF'
+{
+  "name": "sdgclaw-bridge",
+  "version": "1.0.0",
+  "description": "SDG Claw Termux WebSocket bridge",
+  "main": "server.js",
+  "scripts": {
+    "start": "node server.js"
+  },
+  "dependencies": {
+    "ws": "^8.16.0"
+  },
+  "license": "MIT"
+}
+PACKAGEJSON_EOF
+echo "      Done."
+
+# ── Step 4: npm install ───────────────────────────────────────────────────────
+echo "[4/4] Running npm install …"
 cd "$BRIDGE_DIR"
-if ! npm install --omit=dev 2>&1; then
-    die "npm install failed. Check your internet connection."
-fi
-success "Dependencies installed."
+npm install --loglevel=warn
+echo "      Done."
 
-# ── Step 8: Make the script executable ───────────────────────────────────────
-chmod +x "$SERVER_FILE"
-success "server.js marked executable."
-
-# ── Step 9: Sanity-check the installation ────────────────────────────────────
-info "Verifying installation…"
-
-[[ -f "$SERVER_FILE" ]] || die "server.js not found at expected location."
-[[ -f "$BRIDGE_DIR/node_modules/ws/package.json" ]] || \
-    die "ws module not found in node_modules."
-
-# Quick syntax check
-node --check "$SERVER_FILE" || die "server.js has syntax errors."
-success "All checks passed."
-
-# ── Done ──────────────────────────────────────────────────────────────────────
 echo ""
-echo -e "${BOLD}${GREEN}✓ SDG Claw Bridge installed successfully!${NC}"
-echo ""
-echo -e "  Bridge directory : ${CYAN}$BRIDGE_DIR${NC}"
-echo -e "  Start server     : ${CYAN}node $SERVER_FILE${NC}"
-echo -e "  WebSocket URL    : ${CYAN}ws://127.0.0.1:$PORT${NC}"
-echo ""
-echo -e "${YELLOW}Starting the bridge now…${NC}"
+echo "══════════════════════════════════════════════"
+echo "  Setup complete!  Starting bridge server…"
+echo "  Press Ctrl+C to stop."
+echo "══════════════════════════════════════════════"
 echo ""
 
+# Start the server (blocking — keep this terminal open)
 exec node "$SERVER_FILE"
