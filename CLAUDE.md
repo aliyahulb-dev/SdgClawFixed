@@ -82,7 +82,7 @@
 
 | File | Role |
 |---|---|
-| `push_changes.sh` (or similar) | Utility shell script added to automate pushing local changes to the Git repository; committed to the `feat/add-git-push-script-rndjb-queued` branch and merged via `main_queued` |
+| `push_changes.sh` (or similar) | Utility shell script added to automate pushing local changes to the Git repository; committed to the repo root and tracked in version control like any other source file |
 
 ### Resources (`app/src/main/res/`)
 
@@ -228,10 +228,11 @@ var isCollapsed: Boolean  // backed by instance field; no SharedPreferences pers
 ## Git Workflow
 
 - **Default integration branch**: `main`
-- **Work branches**: feature branches named `feat/<description>-<id>-queued` (e.g., `feat/add-git-push-script-rndjb-queued`)
+- **Work branches**: feature branches named `feat/<description>-<id>-queued` (e.g., `feat/add-git-push-script-rndjb-queued`, `feat/push-local-changes-9tb9s-queued`)
 - **Queued merge branch**: `main_queued` — `main` is synced into `main_queued` before feature branches are created from it; feature branches are committed to `main_queued` before final merge
-- **Commit granularity**: one commit per logical file addition or change set
+- **Commit granularity**: one commit per logical file addition or change set; multi-file tasks may produce a single commit bundling related files (e.g., 2 files committed together when they form a coherent change set)
 - **Utility/automation scripts** (e.g., Git push helpers) are committed to the repo root and tracked in version control like any other source file
+- **Branch creation**: feature branches are always created from `main_queued` (after syncing `main` into it), never directly from `main`
 
 ---
 
@@ -242,6 +243,4 @@ var isCollapsed: Boolean  // backed by instance field; no SharedPreferences pers
 - `TAG` constant in each class used with `android.util.Log`
 - Coroutines used throughout for async operations; `withContext(Dispatchers.IO)` for blocking I/O
 - Callbacks set via `setOn*` methods (e.g., `setOnConnected`, `setOnAgentResponse`)
-- Nullability: bridge references typed as nullable (`TermuxBridge?`); forced with `!!` where lifecycle guarantees non-null
-- `Channel<String>(Channel.UNLIMITED)` used for inter-component message passing
-- `StateFlow` used for observable state that UI components collect (e.g., `BridgePollingStateMachine.status
+- Nullability: bridge references typed as nullable (`Term
