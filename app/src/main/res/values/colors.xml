@@ -1,5 +1,47 @@
 <?xml version="1.0" encoding="utf-8"?>
 <resources>
+    <!-- ── Core surface / background palette ───────────────────────────── -->
+    <color name="surface_dark">#0F1117</color>
+    <color name="card_bg">#1A1D27</color>
+    <color name="gray_dark">#1F2937</color>
+    <color name="gray_medium">#374151</color>
+    <color name="gray_light">#6B7280</color>
+
+    <!-- ── Text ─────────────────────────────────────────────────────────── -->
+    <color name="text_primary">#E5E7EB</color>
+    <color name="text_secondary">#9CA3AF</color>
+
+    <!-- ── Accent colours ───────────────────────────────────────────────── -->
+    <color name="accent_blue">#3B82F6</color>
+    <color name="accent_green">#22C55E</color>
+    <color name="accent_red">#EF4444</color>
+    <color name="accent_yellow">#F59E0B</color>
+    <color name="accent_purple">#8B5CF6</color>
+
+    <!-- ── Status / connection indicators ──────────────────────────────── -->
+    <color name="status_connected">#22C55E</color>
+    <color name="status_disconnected">#EF4444</color>
+
+    <!-- ── Badge chip colours ───────────────────────────────────────────── -->
+    <!-- Pending badge -->
+    <color name="badge_pending_bg">#1F2937</color>
+    <color name="badge_pending_border">#374151</color>
+    <color name="badge_pending_text">#9CA3AF</color>
+    <!-- Done badge -->
+    <color name="badge_done_bg">#14532D</color>
+    <color name="badge_done_border">#166534</color>
+    <color name="badge_done_text">#22C55E</color>
+    <!-- Error badge -->
+    <color name="badge_error_bg">#450A0A</color>
+    <color name="badge_error_border">#7F1D1D</color>
+    <color name="badge_error_text">#EF4444</color>
+
+    <!-- ── Message bubble backgrounds ──────────────────────────────────── -->
+    <color name="bubble_assistant">#1E2332</color>
+    <color name="bubble_user">#1A3A5C</color>
+    <color name="bubble_tool">#1A2B1A</color>
+
+    <!-- ── Material / system ────────────────────────────────────────────── -->
     <color name="purple_200">#FFBB86FC</color>
     <color name="purple_500">#FF6200EE</color>
     <color name="purple_700">#FF3700B3</color>
@@ -7,14 +49,4 @@
     <color name="teal_700">#FF018786</color>
     <color name="black">#FF000000</color>
     <color name="white">#FFFFFFFF</color>
-    <color name="green">#FF4CAF50</color>
-    <color name="red">#FFF44336</color>
-    <color name="blue">#FF2196F3</color>
-    <color name="orange">#FFFF9800</color>
-    <color name="gray_light">#FFE0E0E0</color>
-    <color name="gray_medium">#FF9E9E9E</color>
-    <color name="gray_dark">#FF616161</color>
-    <color name="background_dark">#FF121212</color>
-    <color name="surface_dark">#FF1E1E1E</color>
-    <color name="card_bg">#FF2D2D2D</color>
 </resources>
