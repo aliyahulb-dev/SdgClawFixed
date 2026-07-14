@@ -38,6 +38,7 @@
 | **Bridge Layer** | `TermuxBridge` — WebSocket client managing persistent connection to Termux Node.js server |
 | **Diagnostics** | `StabilityDiagnostic` — pure-Kotlin agent trajectory analysis (no external deps) |
 | **Application** | `SDGClawApplication` — singleton Application class; owns `TermuxBridge` lifecycle |
+| **Assets** | `setup.sh` — bundled shell script asset for automated Termux bridge installation |
 
 ---
 
@@ -54,7 +55,7 @@
 | `LLMClient.kt` | Multi-provider LLM HTTP client using OkHttp; handles OpenAI, Anthropic, Google Gemini, and custom OpenAI-compatible endpoints; reads API keys from SharedPreferences |
 | `ToolRegistry.kt` | Registers local tools (Kotlin lambdas) and remote tools (via Termux bridge); `executeTool()` dispatches by tool type |
 | `SettingsActivity.kt` | UI for configuring API keys, model names per provider, active provider selection, and system prompt; saves to SharedPreferences |
-| `BridgeSetupActivity.kt` | Step-by-step guided setup wizard for the Termux WebSocket bridge; walks the user through installing Termux, Node.js, copying bridge files, and starting the server; verifies connection at the end |
+| `BridgeSetupActivity.kt` | Step-by-step guided setup wizard for the Termux WebSocket bridge; walks the user through installing Termux, Node.js, copying bridge files, and starting the server; copies bundled `setup.sh` from assets and provides a way to deploy it; verifies connection at the end |
 | `StabilityDiagnostic.kt` | Pure Kotlin implementation of blackbox agent stability analysis; classifies trajectory as converging/diverging/limit-cycle/chaotic using drift and Shannon entropy metrics |
 | `bridge/TermuxBridge.kt` | OkHttp WebSocket client; connects to `ws://127.0.0.1:8765`; auto-reconnect (3s delay); ping interval 30s; queues messages when disconnected |
 
@@ -64,6 +65,12 @@
 |---|---|
 | `package.json` | Node.js package; depends on `ws ^8.16.0`; entry point `server.js` |
 | `server.js` (described in README) | WebSocket server on port 8765; receives tool execution requests from the Android app; runs shell commands via `child_process.spawn` |
+
+### Bundled Assets (`app/src/main/assets/`)
+
+| File | Role |
+|---|---|
+| `setup.sh` | Shell script bundled as an Android asset; automates Termux bridge setup (creates directory, writes `server.js`, runs `npm install ws`, and starts the server); copied to a user-accessible location (e.g., `/sdcard/sdgclaw-setup/`) at runtime and displayed for the user to run in Termux |
 
 ### Resources (`app/src/main/res/`)
 
@@ -92,7 +99,7 @@
 
 | Category | Technology |
 |---|---|
-| **Language** | Kotlin (Android app), JavaScript/Node.js (Termux bridge) |
+| **Language** | Kotlin (Android app), JavaScript/Node.js (Termux bridge), Shell (setup script) |
 | **Android SDK** | API 34 (target), Material Design 3 |
 | **UI** | ViewBinding / DataBinding, RecyclerView, AppCompat, Material Components |
 | **Networking** | OkHttp (HTTP + WebSocket client) |
@@ -184,9 +191,18 @@ data class Report(
 - Maximum 10 agent iterations per turn (`MAX_ITERATIONS = 10`)
 - System prompt is stored in SharedPreferences under a dedicated key and read in `ChatActivity` before constructing `AgentLoop`; it is injected into the conversation history as a `ChatMessage("system", ...)` prepended to every turn
 
+### Asset Bundling Pattern (`setup.sh`)
+- Shell scripts and other static deployment files are bundled in `app/src/main/assets/` so they are included in the APK and accessible at runtime via `Context.assets`
+- At runtime, the activity (typically `BridgeSetupActivity`) opens the asset with `assets.open("setup.sh")` and copies it to an accessible path (e.g., `/sdcard/sdgclaw-setup/setup.sh`) using standard `InputStream`/`FileOutputStream` with a byte-buffer copy loop; this runs on `Dispatchers.IO`
+- After copying, the UI displays the target path and instructs the user to run the script in Termux; a "Copy Path" or "Copy Command" button provides the exact command (e.g., `bash /sdcard/sdgclaw-setup/setup.sh`) to the clipboard for convenience
+- The `setup.sh` script itself is self-contained: it creates the bridge directory (`~/sdgclaw-bridge`), writes `server.js` inline via a heredoc, installs dependencies (`npm install ws`), and starts the server; it does not rely on any files outside of what it generates
+- Asset copy operations are idempotent (overwrite if exists); errors during copy are surfaced in the UI via a status `TextView`
+- The `WRITE_EXTERNAL_STORAGE` / `READ_EXTERNAL_STORAGE` permission situation (API 29+) is handled by copying to `getExternalFilesDir()` or the app's own external storage directory when targeting API 29+, or by using scoped storage conventions; alternatively, the script is copied to internal storage and the path shown uses `getFilesDir()`
+
 ### Step-Based Wizard UI Pattern (`BridgeSetupActivity`)
 - Multi-step setup flows are implemented as a single `Activity` with a `currentStep: Int` state variable
 - Step content (title, body text, code snippets) is driven by a `steps: List<SetupStep>` data structure defined in the activity; each `SetupStep` is a local data class holding `title`, `description`, `codeSnippet` (nullable), and any per-step action flags
+- A dedicated step type/flag (e.g., `isScriptCopyStep: Boolean`) marks the step where the `setup.sh` asset is copied to external storage; the activity performs the copy when the user reaches that step
 - Navigation uses Back/Next buttons; the final step's Next becomes a Finish/Verify button that triggers a live connection test against `TermuxBridge`
 - A horizontal step indicator (e.g., dots or numbered chips) reflects `currentStep` visually
 - Code snippets displayed in a monospace `TextView` inside a visually distinct card (dark background, rounded corners) so users can read commands to type into Termux
@@ -235,79 +251,4 @@ conversationHistory.add(ChatMessage("user", ...))
     ▼
 runAgentTurn()  [up to MAX_ITERATIONS=10]
     │
-    ├─► LLMClient.chat(history, tools) ──► LLM API (HTTP)
-    │         │
-    │         ├─ text response ──► onAgentResponse callback ──► ChatActivity UI
-    │         │
-    │         └─ tool_call ──► ToolRegistry.executeTool()
-    │                   │
-    │                   ├─ local tool: Kotlin lambda
-    │                   └─ remote tool: TermuxBridge WebSocket ──► Node.js ──► shell
-    │                             │
-    │                             └─ result ──► conversationHistory.add("tool", result)
-    │                                          └─ next LLM iteration
-    │
-    ▼
-AgentState transitions: IDLE → THINKING → CALLING_TOOL → WAITING_FOR_TOOL → RESPONDING → IDLE
-```
-
----
-
-## WebSocket Bridge Protocol
-
-The Termux bridge (Node.js `server.js`) listens on `ws://127.0.0.1:8765`.
-
-**App → Bridge** (JSON):
-```json
-{
-  "type": "execute_command" | "read_file" | "write_file" | "list_dir" | "ping",
-  "id": "<request-id>",
-  "payload": { ... }
-}
-```
-
-**Bridge → App** (JSON):
-```json
-{
-  "type": "result" | "error" | "pong",
-  "id": "<request-id>",
-  "output": "...",
-  "error": "..."
-}
-```
-
----
-
-## Permissions
-
-Declared in `AndroidManifest.xml`:
-- `INTERNET` — LLM API calls and WebSocket connection
-- `FOREGROUND_SERVICE` — background agent operation
-- `FOREGROUND_SERVICE_DATA_SYNC` — API 34 foreground service type
-
----
-
-## Development Workflow
-
-### Prerequisites
-- Android Studio or A-IDE
-- Gradle 8.13
-- Android SDK 34
-- Kotlin 1.9.22
-- Termux (from F-Droid) with Node.js (`pkg install nodejs`)
-
-### Build
-```bash
-./gradlew assembleDebug
-```
-
-### Termux Bridge Setup
-```bash
-mkdir -p ~/sdgclaw-bridge && cd ~/sdgclaw-bridge
-npm init -y
-npm install ws
-# Copy server.js to this directory
-node ~/sdgclaw-bridge/server.js
-```
-
-The in-app `Bridge
+    ├
