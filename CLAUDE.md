@@ -215,6 +215,16 @@ var isCollapsed: Boolean  // backed by instance field; no SharedPreferences pers
 
 ---
 
+## Known Build Issues & Fixes
+
+### Missing Color Resources (resolved via `feat/fix-missing-color-resources-hx6es-queued`)
+- **Symptom**: Install/build fails with resource-not-found errors for color references used in drawables or layouts.
+- **Root cause**: `values/colors.xml` was missing one or more color entries that are referenced by `drawable/bg_regime_*.xml` or other resource files (e.g., `regime_converging`, `regime_diverging`, `regime_limit_cycle`, `regime_chaotic`).
+- **Fix pattern**: Ensure all color names referenced anywhere in `res/` are declared in `values/colors.xml`. When adding new drawables or layouts that reference colors, always add the corresponding color entry to `colors.xml` in the same commit.
+- **Prevention**: Before committing new drawable or layout XML files, grep the file for `@color/` references and verify each entry exists in `values/colors.xml`.
+
+---
+
 ## Git Workflow
 
 - **Default integration branch**: `main`
@@ -234,14 +244,4 @@ var isCollapsed: Boolean  // backed by instance field; no SharedPreferences pers
 - Callbacks set via `setOn*` methods (e.g., `setOnConnected`, `setOnAgentResponse`)
 - Nullability: bridge references typed as nullable (`TermuxBridge?`); forced with `!!` where lifecycle guarantees non-null
 - `Channel<String>(Channel.UNLIMITED)` used for inter-component message passing
-- `StateFlow` used for observable state that UI components collect (e.g., `BridgePollingStateMachine.status`)
-
-### Architecture Conventions
-- `SDGClawApplication` is the single owner of `TermuxBridge` and `BridgePollingStateMachine`; activities retrieve them via `application as SDGClawApplication`
-- Activities use `lifecycleScope` for coroutines; Application uses a manual `CoroutineScope(SupervisorJob() + Dispatchers.Main)`
-- `AgentLoop` accepts all dependencies via constructor (LLMClient, ToolRegistry, TermuxBridge, system prompt string)
-- Maximum 10 agent iterations per turn (`MAX_ITERATIONS = 10`)
-- System prompt is stored in SharedPreferences under a dedicated key and read in `ChatActivity` before constructing `AgentLoop`; it is injected into the conversation history as a `ChatMessage("system", ...)` prepended to every turn
-
-### Stability Dashboard Pattern (`StabilityDashboardView` + `ChatActivity`)
-- `StabilityDashboardView` is a
+- `StateFlow` used for observable state that UI components collect (e.g., `BridgePollingStateMachine.status
