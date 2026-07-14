@@ -1,115 +1,138 @@
 package com.sdgclaw
 
+import android.content.Intent
 import android.os.Bundle
-import android.util.Log
 import android.view.View
-import android.widget.Toast
+import android.widget.Button
+import android.widget.ImageView
+import android.widget.TextView
 import androidx.appcompat.app.AppCompatActivity
-import androidx.lifecycle.lifecycleScope
+import androidx.core.content.ContextCompat
 import com.sdgclaw.bridge.TermuxBridge
-import kotlinx.coroutines.launch
-import org.json.JSONObject
 
+/**
+ * MainActivity — home screen of SDG Claw.
+ *
+ * Shows the live Termux-bridge connection status and provides entry points
+ * for testing the connection, opening Settings, starting a Chat session,
+ * and — when the bridge is not connected — navigating to [BridgeSetupActivity].
+ */
 class MainActivity : AppCompatActivity() {
-    
+
     companion object {
         private const val TAG = "MainActivity"
     }
-    
-    private var termuxBridge: TermuxBridge? = null
-    
+
+    // ── Views ──────────────────────────────────────────────────────────────
+
+    private lateinit var statusDot: ImageView
+    private lateinit var tvConnectionStatus: TextView
+    private lateinit var tvBridgeHint: TextView
+    private lateinit var btnSetupBridge: Button
+    private lateinit var btnTestConnection: Button
+    private lateinit var btnSettings: Button
+    private lateinit var btnChat: Button
+
+    // ── Bridge reference ───────────────────────────────────────────────────
+
+    private val bridge: TermuxBridge?
+        get() = (application as? SDGClawApplication)?.termuxBridge
+
+    // ── Lifecycle ──────────────────────────────────────────────────────────
+
     override fun onCreate(savedInstanceState: Bundle?) {
         super.onCreate(savedInstanceState)
         setContentView(R.layout.activity_main)
-        
-        // Get bridge from Application
-        val app = application as SDGClawApplication
-        termuxBridge = app.getTermuxBridge()
-        
-        setupUI()
-        setupBridgeCallbacks()
+
+        initViews()
+        setupListeners()
+        wireConnectionCallbacks()
     }
-    
-    private fun setupUI() {
-        // Test connection button
-        findViewById<View>(R.id.btnTestConnection).setOnClickListener {
-            testConnection()
+
+    override fun onResume() {
+        super.onResume()
+        // Refresh status whenever the user returns (e.g. from SettingsActivity
+        // or BridgeSetupActivity).
+        updateConnectionStatus()
+    }
+
+    // ── View binding ───────────────────────────────────────────────────────
+
+    private fun initViews() {
+        statusDot = findViewById(R.id.statusDot)
+        tvConnectionStatus = findViewById(R.id.tvConnectionStatus)
+        tvBridgeHint = findViewById(R.id.tvBridgeHint)
+        btnSetupBridge = findViewById(R.id.btnSetupBridge)
+        btnTestConnection = findViewById(R.id.btnTestConnection)
+        btnSettings = findViewById(R.id.btnSettings)
+        btnChat = findViewById(R.id.btnChat)
+    }
+
+    // ── Listeners ──────────────────────────────────────────────────────────
+
+    private fun setupListeners() {
+        btnTestConnection.setOnClickListener {
+            bridge?.testConnection()
         }
-        
-        // Open settings button
-        findViewById<View>(R.id.btnSettings).setOnClickListener {
-            val intent = android.content.Intent(this, SettingsActivity::class.java)
-            startActivity(intent)
+
+        btnSettings.setOnClickListener {
+            startActivity(Intent(this, SettingsActivity::class.java))
         }
-        
-        // Open chat button
-        findViewById<View>(R.id.btnChat).setOnClickListener {
-            val intent = android.content.Intent(this, ChatActivity::class.java)
-            startActivity(intent)
+
+        btnChat.setOnClickListener {
+            startActivity(Intent(this, ChatActivity::class.java))
+        }
+
+        btnSetupBridge.setOnClickListener {
+            startActivity(Intent(this, BridgeSetupActivity::class.java))
+        }
+
+        // The hint text row is also tappable — same destination as the button.
+        tvBridgeHint.setOnClickListener {
+            startActivity(Intent(this, BridgeSetupActivity::class.java))
         }
     }
-    
-    private fun setupBridgeCallbacks() {
-        termuxBridge?.setOnConnected {
-            runOnUiThread {
-                updateConnectionStatus(true)
-                Log.d(TAG, "Bridge connected!")
-                Toast.makeText(this, "Connected to Termux Bridge!", Toast.LENGTH_SHORT).show()
-            }
+
+    // ── Connection callbacks ───────────────────────────────────────────────
+
+    private fun wireConnectionCallbacks() {
+        bridge?.setOnConnected {
+            runOnUiThread { updateConnectionStatus() }
         }
-        
-        termuxBridge?.setOnDisconnected { reason ->
-            runOnUiThread {
-                updateConnectionStatus(false)
-                Log.d(TAG, "Bridge disconnected: $reason")
-                Toast.makeText(this, "Disconnected: $reason", Toast.LENGTH_SHORT).show()
-            }
+        bridge?.setOnDisconnected {
+            runOnUiThread { updateConnectionStatus() }
         }
-        
-        termuxBridge?.setOnMessage { message ->
-            runOnUiThread {
-                Log.d(TAG, "Received from bridge: $message")
-                appendToLog("RX: $message")
-            }
+    }
+
+    // ── Status display ─────────────────────────────────────────────────────
+
+    private fun updateConnectionStatus() {
+        val connected = bridge?.isConnected() ?: false
+
+        if (connected) {
+            statusDot.setImageDrawable(
+                ContextCompat.getDrawable(this, R.drawable.circle_green)
+            )
+            tvConnectionStatus.text = getString(R.string.status_connected)
+            tvConnectionStatus.setTextColor(
+                ContextCompat.getColor(this, R.color.status_connected)
+            )
+
+            // Hide the bridge-setup nudge when already connected.
+            tvBridgeHint.visibility = View.GONE
+            btnSetupBridge.visibility = View.GONE
+        } else {
+            statusDot.setImageDrawable(
+                ContextCompat.getDrawable(this, R.drawable.circle_red)
+            )
+            tvConnectionStatus.text = getString(R.string.status_disconnected)
+            tvConnectionStatus.setTextColor(
+                ContextCompat.getColor(this, R.color.status_disconnected)
+            )
+
+            // Show the bridge-setup nudge when disconnected.
+            tvBridgeHint.visibility = View.VISIBLE
+            btnSetupBridge.visibility = View.VISIBLE
         }
-        
-        termuxBridge?.setOnError { error ->
-            runOnUiThread {
-                Log.e(TAG, "Bridge error: $error")
-                appendToLog("ERROR: $error")
-            }
-        }
-        
-        // Check initial connection state
-        updateConnectionStatus(termuxBridge?.isConnected() == true)
-    }
-    
-    private fun testConnection() {
-        Log.d(TAG, "Test connection button clicked")
-        appendToLog("TX: Sending test message...")
-        termuxBridge?.testConnection()
-    }
-    
-    private fun updateConnectionStatus(connected: Boolean) {
-        val statusText = findViewById<View>(R.id.tvConnectionStatus) as? android.widget.TextView
-        val indicator = findViewById<View>(R.id.ivConnectionIndicator)
-        
-        statusText?.text = if (connected) "Connected" else "Disconnected"
-        statusText?.setTextColor(if (connected) 0xFF4CAF50.toInt() else 0xFFF44336.toInt())
-        
-        indicator?.setBackgroundColor(if (connected) 0xFF4CAF50.toInt() else 0xFFF44336.toInt())
-    }
-    
-    private fun appendToLog(message: String) {
-        val logView = findViewById<View>(R.id.tvLog) as? android.widget.TextView
-        logView?.append("\n$message")
-        // Auto-scroll to bottom
-        val scrollView = findViewById<View>(R.id.scrollView) as? android.widget.ScrollView
-        scrollView?.post { scrollView.fullScroll(View.FOCUS_DOWN) }
-    }
-    
-    override fun onDestroy() {
-        super.onDestroy()
-        // Don't disconnect bridge - let Application manage lifecycle
     }
 }

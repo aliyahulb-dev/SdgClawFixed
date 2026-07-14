@@ -1,21 +1,67 @@
 <?xml version="1.0" encoding="utf-8"?>
 <resources>
     <string name="app_name">SDG Claw</string>
-    <string name="connection_status_connected">Connected</string>
-    <string name="connection_status_disconnected">Disconnected</string>
-    <string name="connection_status_connecting">Connecting...</string>
-    <string name="btn_test_connection">Test Bridge Connection</string>
-    <string name="btn_chat">Open Chat</string>
+
+    <!-- MainActivity -->
+    <string name="main_title">SDG Claw</string>
+    <string name="main_subtitle">AI Agent</string>
+    <string name="status_connected">Connected</string>
+    <string name="status_disconnected">Disconnected</string>
+    <string name="btn_test_connection">Test Connection</string>
     <string name="btn_settings">Settings</string>
-    <string name="log_initial">SDG Claw - Log Output\nWaiting for connection...</string>
-    <string name="bridge_url">ws://127.0.0.1:8765</string>
+    <string name="btn_chat">Start Chat</string>
+    <string name="btn_setup_bridge">Set Up Bridge</string>
+    <string name="bridge_disconnected_hint">Termux bridge is not connected. Tap to set up.</string>
+
+    <!-- SettingsActivity -->
     <string name="settings_title">Settings</string>
-    <string name="api_key_openai">OpenAI API Key</string>
-    <string name="api_key_anthropic">Anthropic API Key</string>
-    <string name="api_key_google">Google API Key</string>
-    <string name="api_key_custom">Custom Endpoint API Key</string>
-    <string name="custom_endpoint">Custom Endpoint URL</string>
-    <string name="model_name">Model Name</string>
-    <string name="save">Save</string>
-    <string name="cancel">Cancel</string>
+    <string name="settings_openai_key_hint">OpenAI API Key</string>
+    <string name="settings_openai_model_hint">Model (e.g. gpt-4o)</string>
+    <string name="settings_anthropic_key_hint">Anthropic API Key</string>
+    <string name="settings_anthropic_model_hint">Model (e.g. claude-3-5-sonnet-20241022)</string>
+    <string name="settings_google_key_hint">Google API Key</string>
+    <string name="settings_google_model_hint">Model (e.g. gemini-1.5-pro)</string>
+    <string name="settings_custom_name_hint">Provider Name</string>
+    <string name="settings_custom_url_hint">Base URL</string>
+    <string name="settings_custom_key_hint">API Key</string>
+    <string name="settings_custom_model_hint">Model name</string>
+    <string name="settings_system_prompt_hint">System prompt (optional) — describe the agent\'s persona and instructions</string>
+    <string name="btn_test">Test</string>
+    <string name="btn_save">Save Settings</string>
+
+    <!-- ChatActivity -->
+    <string name="chat_title">Chat</string>
+    <string name="chat_input_hint">Type a message…</string>
+    <string name="btn_send">Send</string>
+
+    <!-- BridgeSetupActivity -->
+    <string name="bridge_setup_title">Bridge Setup</string>
+    <string name="bridge_setup_subtitle">Follow these steps to connect SDG Claw to the Termux WebSocket bridge. Open Termux and run the commands shown below.</string>
+    <string name="bridge_setup_retry">Retry Connection</string>
+    <string name="bridge_setup_commands_header">Run in Termux</string>
+
+    <!-- Bridge setup step rows -->
+    <string name="step_nodejs_title">Node.js installed</string>
+    <string name="step_nodejs_desc">Install Node.js via Termux: pkg install nodejs</string>
+    <string name="step_ws_title">ws package installed</string>
+    <string name="step_ws_desc">Install the ws library inside your bridge directory</string>
+    <string name="step_server_title">Bridge server running</string>
+    <string name="step_server_desc">Start server.js in Termux so it listens on port 8765</string>
+    <string name="step_ws_connected_title">WebSocket connected</string>
+    <string name="step_ws_connected_desc">App has established a live WebSocket connection to the bridge</string>
+
+    <!-- Bridge setup terminal commands -->
+    <string name="bridge_cmd_1">pkg install nodejs</string>
+    <string name="bridge_cmd_2">mkdir -p ~/sdgclaw-bridge &amp;&amp; cd ~/sdgclaw-bridge</string>
+    <string name="bridge_cmd_3">npm init -y &amp;&amp; npm install ws</string>
+    <string name="bridge_cmd_4">node ~/sdgclaw-bridge/server.js</string>
+
+    <!-- Badge labels -->
+    <string name="badge_pending">PENDING</string>
+    <string name="badge_done">DONE</string>
+    <string name="badge_error">ERROR</string>
+
+    <!-- Accessibility -->
+    <string name="back">Back</string>
+    <string name="step_status">Step status</string>
 </resources>

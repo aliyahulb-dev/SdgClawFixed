@@ -31,7 +31,7 @@
 
 | Layer | Responsibility |
 |---|---|
-| **UI Layer** | `MainActivity`, `ChatActivity`, `SettingsActivity` — Android Activities with Material Design 3 |
+| **UI Layer** | `MainActivity`, `ChatActivity`, `SettingsActivity`, `BridgeSetupActivity` — Android Activities with Material Design 3 |
 | **Agent Layer** | `AgentLoop` — orchestrates the conversation loop between user, LLM, and tools |
 | **LLM Layer** | `LLMClient` — multi-provider HTTP client (OpenAI, Anthropic, Google, Custom) |
 | **Tool Layer** | `ToolRegistry` — registers and dispatches local (Kotlin) and remote (Termux) tools |
@@ -48,12 +48,13 @@
 | File | Role |
 |---|---|
 | `SDGClawApplication.kt` | Application singleton; initializes and auto-connects `TermuxBridge`; exposes bridge and `CoroutineScope` to activities |
-| `MainActivity.kt` | Home screen; shows connection status; buttons for Test Connection, Settings, Chat |
+| `MainActivity.kt` | Home screen; shows connection status; buttons for Test Connection, Settings, Chat, and Setup Bridge |
 | `ChatActivity.kt` | Chat UI using `RecyclerView`; initializes `AgentLoop`, `LLMClient`, `ToolRegistry`; wires agent callbacks to UI; injects system prompt from SharedPreferences into `AgentLoop` |
 | `AgentLoop.kt` | Core agent loop; manages `conversationHistory`, iterates LLM↔tool calls up to `MAX_ITERATIONS=10`; emits state via callbacks (`onAgentResponse`, `onToolCall`, `onToolResult`, `onError`, `onStateChange`); accepts system prompt as constructor parameter |
 | `LLMClient.kt` | Multi-provider LLM HTTP client using OkHttp; handles OpenAI, Anthropic, Google Gemini, and custom OpenAI-compatible endpoints; reads API keys from SharedPreferences |
 | `ToolRegistry.kt` | Registers local tools (Kotlin lambdas) and remote tools (via Termux bridge); `executeTool()` dispatches by tool type |
 | `SettingsActivity.kt` | UI for configuring API keys, model names per provider, active provider selection, and system prompt; saves to SharedPreferences |
+| `BridgeSetupActivity.kt` | Step-by-step guided setup wizard for the Termux WebSocket bridge; walks the user through installing Termux, Node.js, copying bridge files, and starting the server; verifies connection at the end |
 | `StabilityDiagnostic.kt` | Pure Kotlin implementation of blackbox agent stability analysis; classifies trajectory as converging/diverging/limit-cycle/chaotic using drift and Shannon entropy metrics |
 | `bridge/TermuxBridge.kt` | OkHttp WebSocket client; connects to `ws://127.0.0.1:8765`; auto-reconnect (3s delay); ping interval 30s; queues messages when disconnected |
 
@@ -69,13 +70,14 @@
 | Path | Role |
 |---|---|
 | `layout/activity_chat.xml` | Chat screen layout with `RecyclerView`, input bar, typing indicator |
-| `layout/activity_main.xml` | Home screen layout |
+| `layout/activity_main.xml` | Home screen layout; includes Setup Bridge button entry point |
 | `layout/activity_settings.xml` | Settings screen layout with TextInputEditText fields per provider, plus system prompt multi-line editor |
+| `layout/activity_bridge_setup.xml` | Bridge setup wizard layout; contains step indicator, step content area (ScrollView with per-step instructions and code blocks), navigation buttons (Back/Next/Finish), and a connection status indicator on the final step |
 | `layout/item_message.xml` | Individual chat message bubble layout |
 | `drawable/bg_*.xml` | Rounded rectangle backgrounds for message bubbles (assistant, user, tool) and inputs |
 | `values/colors.xml` | Dark-theme color palette (`surface_dark`, `card_bg`, `gray_dark`, `gray_medium`, etc.) |
 | `values/themes.xml` | `Theme.SDGClaw` and `Theme.SDGClaw.NoActionBar` (Material Design 3) |
-| `values/strings.xml` | App strings |
+| `values/strings.xml` | App strings including all bridge setup step titles, instructions, and code snippet strings |
 
 ### Build Files
 
@@ -182,6 +184,16 @@ data class Report(
 - Maximum 10 agent iterations per turn (`MAX_ITERATIONS = 10`)
 - System prompt is stored in SharedPreferences under a dedicated key and read in `ChatActivity` before constructing `AgentLoop`; it is injected into the conversation history as a `ChatMessage("system", ...)` prepended to every turn
 
+### Step-Based Wizard UI Pattern (`BridgeSetupActivity`)
+- Multi-step setup flows are implemented as a single `Activity` with a `currentStep: Int` state variable
+- Step content (title, body text, code snippets) is driven by a `steps: List<SetupStep>` data structure defined in the activity; each `SetupStep` is a local data class holding `title`, `description`, `codeSnippet` (nullable), and any per-step action flags
+- Navigation uses Back/Next buttons; the final step's Next becomes a Finish/Verify button that triggers a live connection test against `TermuxBridge`
+- A horizontal step indicator (e.g., dots or numbered chips) reflects `currentStep` visually
+- Code snippets displayed in a monospace `TextView` inside a visually distinct card (dark background, rounded corners) so users can read commands to type into Termux
+- Copy-to-clipboard button accompanies each code snippet block for convenience
+- Connection verification on the final step runs in `lifecycleScope` on `Dispatchers.IO`; result updates a status `TextView` and icon on the main thread via `withContext(Dispatchers.Main)`
+- `BridgeSetupActivity` is launched from `MainActivity` via a dedicated "Setup Bridge" button; declared in `AndroidManifest.xml` with `Theme.SDGClaw.NoActionBar`
+
 ### SharedPreferences Keys
 - API keys, model names, and active provider are stored in SharedPreferences (existing pattern)
 - System prompt stored under its own dedicated key (e.g., `"system_prompt"`) in the same SharedPreferences file
@@ -198,6 +210,7 @@ data class Report(
 - All drawables are XML shape drawables with rounded corners
 - Message bubble styles: different corner radii for assistant (bottom-left flat), user (bottom-right flat), tool messages
 - No action bar style (`Theme.SDGClaw.NoActionBar`) used on all activities
+- String resources for wizard step content (titles, instructions, code commands) are defined in `strings.xml` rather than hardcoded in the activity, following existing resource conventions
 
 ### Bridge Protocol
 - JSON message passing over WebSocket
@@ -297,52 +310,4 @@ npm install ws
 node ~/sdgclaw-bridge/server.js
 ```
 
-### Testing Connection
-1. Start Node.js bridge in Termux
-2. Launch SDG Claw app
-3. App auto-connects on startup via `SDGClawApplication.onCreate()`
-4. Use "Test Connection" button on `MainActivity` to verify
-5. Green/red circle indicators show connection status
-
-### Settings Configuration
-1. Open Settings from `MainActivity`
-2. Enter API keys for desired providers (stored locally in SharedPreferences, never synced)
-3. Set model names (e.g., `gpt-4o`, `claude-3-5-sonnet-20241022`, `gemini-1.5-pro`)
-4. Select active provider via RadioGroup
-5. Optionally enter a custom system prompt in the System Prompt field (multi-line editor); this overrides the default agent persona/instructions for all subsequent chats
-6. Use per-provider "Test" buttons to validate API keys
-7. Save settings
-
-### Adding New Tools
-**Local tool** (pure Kotlin):
-```kotlin
-toolRegistry.registerLocalTool(
-    name = "my_tool",
-    description = "Does something",
-    parameters = JSONObject("""{"type":"object","properties":{...}}""")
-) { args ->
-    ToolRegistry.ToolResult(success = true, output = "result")
-}
-```
-
-**Remote tool** (via Termux bridge):
-```kotlin
-toolRegistry.registerRemoteTool(
-    name = "shell_tool",
-    description = "Runs in Termux",
-    parameters = JSONObject("""{"type":"object","properties":{...}}""")
-)
-// Handle execution on Node.js server.js side
-```
-
----
-
-## Key Constants
-
-| Constant | Value | Location |
-|---|---|---|
-| `WS_URL` | `ws://127.0.0.1:8765` | `TermuxBridge` |
-| `RECONNECT_DELAY_MS` | `3000L` | `TermuxBridge` |
-| `PING_INTERVAL_MS` | `30000L` | `TermuxBridge` |
-| `MAX_ITERATIONS` | `10` | `AgentLoop` |
-| HTTP connect
+The in-app `Bridge
